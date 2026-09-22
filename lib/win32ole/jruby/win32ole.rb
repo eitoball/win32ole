@@ -58,4 +58,90 @@ class WIN32OLE
   def self.finalizer(ptr, release_fn)
     proc { release_fn.call(ptr) unless ptr.zero? }
   end
+
+  DISP_E_EXCEPTION = -2147352567 # 0x80020009
+
+  def method_missing(name, *args)
+    plan = W.dispatch_plan(name.to_s, args)
+    dispid = dispid_for(plan[:name])
+    if dispid.nil?
+      return super(name, *args)
+    end
+
+    hr, result_bytes, excepinfo_bytes = ole_invoke(dispid, args, plan[:wflags], named_put: plan[:named_put])
+
+    if W.failed?(hr)
+      detail = error_detail(hr, excepinfo_bytes)
+      message = plan[:named_put] ? W.property_put_error_message(plan[:name], detail)
+                                  : W.method_error_message(plan[:name], detail)
+      raise WIN32OLE::RuntimeError, message
+    end
+
+    return nil if plan[:named_put]
+
+    variant_bytes_to_ruby_value(result_bytes)
+  end
+
+  def respond_to_missing?(name, include_private = false)
+    !dispid_for(name.to_s.sub(/=\z/, '')).nil? || super
+  end
+
+  def ruby_value_to_variant_bytes(value, keep_alive)
+    type = W.ruby_to_variant_type(value)
+    payload =
+      case type
+      when :i4 then W.pack_i4(value)
+      when :i8 then W.pack_i8(value)
+      when :r8 then W.pack_r8(value)
+      when :bool then W.pack_bool(value)
+      when :empty then W.pack_empty
+      when :bstr
+        bstr = W.sys_alloc_string.call(W.wstr(value))
+        keep_alive << bstr
+        W.pack_pointer(bstr)
+      when :dispatch
+        W.pack_pointer(value.instance_variable_get(:@ptr))
+      end
+    W.pack_variant(W::VT_FOR_TYPE.fetch(type), payload)
+  end
+
+  def variant_bytes_to_ruby_value(bytes)
+    vt, payload = W.unpack_variant(bytes)
+    type = W.variant_ruby_type(vt)
+    case type
+    when :empty then nil
+    when :i4 then W.unpack_i4(payload)
+    when :i8 then W.unpack_i8(payload)
+    when :r8 then W.unpack_r8(payload)
+    when :bool then W.unpack_bool(payload)
+    when :bstr
+      addr = W.unpack_pointer(payload)
+      str = W.bstr_to_s(addr)
+      W.sys_free_string.call(addr) unless addr.zero?
+      str
+    when :dispatch
+      wrap_dispatch_pointer(W.unpack_pointer(payload))
+    end
+  end
+
+  private
+
+  def wrap_dispatch_pointer(ptr)
+    obj = allocate
+    obj.instance_variable_set(:@ptr, ptr)
+    obj.send(:install_finalizer)
+    obj
+  end
+
+  def error_detail(hr, excepinfo_bytes)
+    if hr == DISP_E_EXCEPTION
+      info = W.parse_excepinfo(excepinfo_bytes)
+      source = W.bstr_to_s(info[:bstr_source_ptr]) || '<Unknown>'
+      description = W.bstr_to_s(info[:bstr_description_ptr]) || '<No Description>'
+      code = info[:w_code].zero? ? info[:scode].to_s(16) : info[:w_code].to_s
+      "\n    OLE error code:#{code} in #{source}\n      #{description}\n#{hresult_detail(hr)}"
+    else
+      "\n#{hresult_detail(hr)}"
+    end
+  end
 end
