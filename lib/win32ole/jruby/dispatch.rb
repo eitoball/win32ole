@@ -54,6 +54,7 @@ class WIN32OLE
 
       release_fn.call(@ptr)
       @ptr = nil
+      ObjectSpace.undefine_finalizer(self)
     end
 
     private
