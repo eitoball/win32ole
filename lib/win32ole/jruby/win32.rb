@@ -166,5 +166,111 @@ class WIN32OLE
         scode: bytes[o[:scode], 4].unpack1('l')
       }
     end
+
+    def ole32
+      @ole32 ||= Fiddle.dlopen('ole32')
+    end
+
+    def oleaut32
+      @oleaut32 ||= Fiddle.dlopen('oleaut32')
+    end
+
+    def kernel32
+      @kernel32 ||= Fiddle.dlopen('kernel32')
+    end
+
+    def co_initialize
+      @co_initialize ||= Fiddle::Function.new(ole32['CoInitialize'], [VOIDP], LONG, STDCALL)
+    end
+
+    def co_uninitialize
+      @co_uninitialize ||= Fiddle::Function.new(ole32['CoUninitialize'], [], VOID, STDCALL)
+    end
+
+    def clsid_from_progid
+      @clsid_from_progid ||= Fiddle::Function.new(ole32['CLSIDFromProgID'], [VOIDP, VOIDP], LONG, STDCALL)
+    end
+
+    def clsid_from_string
+      @clsid_from_string ||= Fiddle::Function.new(ole32['CLSIDFromString'], [VOIDP, VOIDP], LONG, STDCALL)
+    end
+
+    def co_create_instance
+      @co_create_instance ||= Fiddle::Function.new(
+        ole32['CoCreateInstance'], [VOIDP, VOIDP, DWORD, VOIDP, VOIDP], LONG, STDCALL
+      )
+    end
+
+    def sys_alloc_string
+      @sys_alloc_string ||= Fiddle::Function.new(oleaut32['SysAllocString'], [VOIDP], VOIDP, STDCALL)
+    end
+
+    def sys_free_string
+      @sys_free_string ||= Fiddle::Function.new(oleaut32['SysFreeString'], [VOIDP], VOID, STDCALL)
+    end
+
+    FORMAT_MESSAGE_ALLOCATE_BUFFER = 0x00000100
+    FORMAT_MESSAGE_FROM_SYSTEM     = 0x00001000
+    FORMAT_MESSAGE_IGNORE_INSERTS  = 0x00000200
+
+    def format_message
+      @format_message ||= Fiddle::Function.new(
+        kernel32['FormatMessageW'], [DWORD, VOIDP, DWORD, DWORD, VOIDP, DWORD, VOIDP], DWORD, STDCALL
+      )
+    end
+
+    def native_address_of(buffer)
+      Fiddle::Pointer.to_ptr(buffer).to_i
+    end
+
+    def vtable_function(object_addr, index, arg_types, ret_type)
+      vtable_addr = Fiddle::Pointer.new(object_addr)[0, PTR_SIZE].unpack1(PTR_SIZE == 8 ? 'Q' : 'L')
+      func_addr = Fiddle::Pointer.new(vtable_addr)[index * PTR_SIZE, PTR_SIZE].unpack1(PTR_SIZE == 8 ? 'Q' : 'L')
+      Fiddle::Function.new(func_addr, arg_types, ret_type, STDCALL)
+    end
+
+    def bstr_to_s(addr)
+      return nil if addr.nil? || addr.zero?
+
+      ptr = Fiddle::Pointer.new(addr)
+      units = []
+      offset = 0
+      loop do
+        unit = ptr[offset, 2].unpack1('S')
+        break if unit.zero?
+
+        units << unit
+        offset += 2
+      end
+      units.pack('U*')
+    end
+
+    def hresult_system_message(hr)
+      buf_ptr = ("\x00" * PTR_SIZE).b
+      flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS
+      count = format_message.call(flags, nil, hr, 0, buf_ptr, 0, nil)
+      return '' if count.zero?
+
+      addr = buf_ptr.unpack1(PTR_SIZE == 8 ? 'Q' : 'L')
+      msg = bstr_free_local_string(addr, count)
+      msg.chomp
+    end
+
+    # count is the number of UTF-16LE *characters* FormatMessageW wrote,
+    # not bytes — this exact kind of factor-of-2 slip is what the spike's
+    # own retrospective (design §1.2) warns about: easy to get subtly
+    # wrong, and it only shows up once you actually run it on Windows,
+    # which is why this task's real verification is the CI run in Task 7,
+    # not this write-up.
+    def bstr_free_local_string(addr, count)
+      ptr = Fiddle::Pointer.new(addr)
+      msg = ptr[0, count * 2].dup.force_encoding('UTF-16LE').encode('UTF-8')
+      local_free.call(addr)
+      msg
+    end
+
+    def local_free
+      @local_free ||= Fiddle::Function.new(kernel32['LocalFree'], [VOIDP], VOIDP, STDCALL)
+    end
   end
 end
