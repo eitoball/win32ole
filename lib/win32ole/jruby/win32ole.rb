@@ -14,6 +14,9 @@ class WIN32OLE
   def initialize(server, host = nil)
     raise NotImplementedError, 'remote OLE (host) is not supported yet' unless host.nil?
 
+    hr = W.co_initialize.call(nil)
+    raise 'fail: OLE initialize' unless hr.zero? || hr == 1
+
     clsid = resolve_clsid(server)
     ppv = ("\x00" * W::PTR_SIZE).b
     hr = W.co_create_instance.call(
