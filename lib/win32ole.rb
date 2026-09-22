@@ -29,7 +29,7 @@ if defined?(WIN32OLE)
 
     def ole_methods_safely
       ole_methods
-    rescue WIN32OLE::QueryInterfaceError, NoMethodError
+    rescue WIN32OLE::QueryInterfaceError, NameError
       []
     end
   end
