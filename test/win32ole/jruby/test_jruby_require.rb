@@ -13,7 +13,7 @@ class TestJRubyRequire < Test::Unit::TestCase
     omit('JRuby-only') unless RUBY_ENGINE == 'jruby'
     require 'win32ole'
 
-    obj = WIN32OLE.allocate
+    obj = WIN32OLE.new('Scripting.Dictionary')
     assert_nothing_raised { obj.methods }
   end
 end
