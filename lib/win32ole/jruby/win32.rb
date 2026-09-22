@@ -217,8 +217,8 @@ class WIN32OLE
       )
     end
 
-    def native_address_of(buffer)
-      Fiddle::Pointer.to_ptr(buffer).to_i
+    def native_pointer_for(buffer)
+      Fiddle::Pointer.to_ptr(buffer)
     end
 
     def vtable_function(object_addr, index, arg_types, ret_type)

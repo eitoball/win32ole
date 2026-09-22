@@ -67,12 +67,5 @@ if defined?(WIN32OLE) && RUBY_ENGINE == 'jruby'
     ensure
       GC.stress = false
     end
-
-    def test_native_address_of_aliases_not_copies
-      s = "hello world".b
-      addr1 = Fiddle::Pointer.to_ptr(s).to_i
-      addr2 = Fiddle::Pointer.to_ptr(s).to_i
-      assert_equal(addr1, addr2, 'Fiddle::Pointer.to_ptr must alias the String\'s own buffer, not copy it, for the keep-alive discipline in dispatch.rb to be sound')
-    end
   end
 end

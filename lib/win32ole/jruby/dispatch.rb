@@ -9,7 +9,8 @@ class WIN32OLE
       raise WIN32OLE::RuntimeError, 'this WIN32OLE object has already been released' if @ptr.nil? || @ptr.zero?
 
       name_buf = W.wstr(name)
-      names = [W.native_address_of(name_buf)].pack(W::PACK_PTR)
+      name_ptr = W.native_pointer_for(name_buf)
+      names = [name_ptr.to_i].pack(W::PACK_PTR)
       dispids = ("\x00" * 4).b
       hr = get_ids_of_names_fn.call(@ptr, W::IID_NULL, names, 1, 0, dispids)
       return nil if W.failed?(hr)
@@ -28,10 +29,12 @@ class WIN32OLE
 
       arg_variants = arg_values.reverse.map { |v| ruby_value_to_variant_bytes(v, bstrs_to_free) }
       args_blob = arg_variants.join
-      keep_alive << args_blob unless args_blob.empty?
+      args_ptr = args_blob.empty? ? nil : W.native_pointer_for(args_blob)
+      keep_alive << args_ptr if args_ptr
 
       named_blob = named_put ? [W::DISPID_PROPERTYPUT].pack('l') : ''
-      keep_alive << named_blob unless named_blob.empty?
+      named_ptr = named_blob.empty? ? nil : W.native_pointer_for(named_blob)
+      keep_alive << named_ptr if named_ptr
 
       # DISPPARAMS is a real native struct (VARIANTARG *rgvarg; DISPID
       # *rgdispidNamedArgs; UINT cArgs; UINT cNamedArgs;) read positionally
@@ -40,8 +43,8 @@ class WIN32OLE
       # not a hardcoded 8 bytes, or this silently misaligns cArgs/cNamedArgs
       # on x86.
       dispparams = [
-        arg_variants.empty? ? 0 : W.native_address_of(args_blob),
-        named_blob.empty? ? 0 : W.native_address_of(named_blob),
+        args_ptr ? args_ptr.to_i : 0,
+        named_ptr ? named_ptr.to_i : 0,
         arg_variants.size,
         named_put ? 1 : 0
       ].pack("#{W::PACK_PTR}#{W::PACK_PTR}LL")
