@@ -120,14 +120,15 @@ class WIN32OLE
       W.sys_free_string.call(addr) unless addr.zero?
       str
     when :dispatch
-      wrap_dispatch_pointer(W.unpack_pointer(payload))
+      ptr = W.unpack_pointer(payload)
+      ptr.zero? ? nil : wrap_dispatch_pointer(ptr)
     end
   end
 
   private
 
   def wrap_dispatch_pointer(ptr)
-    obj = allocate
+    obj = self.class.allocate
     obj.instance_variable_set(:@ptr, ptr)
     obj.send(:install_finalizer)
     obj
@@ -138,7 +139,7 @@ class WIN32OLE
       info = W.parse_excepinfo(excepinfo_bytes)
       source = W.bstr_to_s(info[:bstr_source_ptr]) || '<Unknown>'
       description = W.bstr_to_s(info[:bstr_description_ptr]) || '<No Description>'
-      code = info[:w_code].zero? ? info[:scode].to_s(16) : info[:w_code].to_s
+      code = info[:w_code].zero? ? (info[:scode] & 0xFFFFFFFF).to_s(16).upcase : info[:w_code].to_s
       "\n    OLE error code:#{code} in #{source}\n      #{description}\n#{hresult_detail(hr)}"
     else
       "\n#{hresult_detail(hr)}"
