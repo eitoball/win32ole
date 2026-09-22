@@ -129,10 +129,8 @@ class WIN32OLE
         end
 
         { name: name[0..-2], wflags: DISPATCH_PROPERTYPUT, named_put: true }
-      elsif args.empty?
-        { name: name, wflags: DISPATCH_METHOD | DISPATCH_PROPERTYGET, named_put: false }
       else
-        { name: name, wflags: DISPATCH_METHOD, named_put: false }
+        { name: name, wflags: DISPATCH_METHOD | DISPATCH_PROPERTYGET, named_put: false }
       end
     end
 

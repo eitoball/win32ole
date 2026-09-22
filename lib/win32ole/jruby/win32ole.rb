@@ -5,6 +5,7 @@ require 'win32ole/jruby/dispatch'
 
 class WIN32OLE
   RuntimeError = Class.new(::RuntimeError)
+  QueryInterfaceError = Class.new(RuntimeError)
 
   include Dispatch
 
@@ -68,6 +69,9 @@ class WIN32OLE
     plan = W.dispatch_plan(name.to_s, args)
     dispid = dispid_for(plan[:name])
     if dispid.nil?
+      if plan[:named_put]
+        raise WIN32OLE::RuntimeError, W.property_put_error_message(plan[:name], "\nunknown property or method: `#{plan[:name]}'")
+      end
       return super(name, *args)
     end
 
