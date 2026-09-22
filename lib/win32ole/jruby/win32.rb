@@ -232,17 +232,8 @@ class WIN32OLE
     def bstr_to_s(addr)
       return nil if addr.nil? || addr.zero?
 
-      ptr = Fiddle::Pointer.new(addr)
-      units = []
-      offset = 0
-      loop do
-        unit = ptr[offset, 2].unpack1('S')
-        break if unit.zero?
-
-        units << unit
-        offset += 2
-      end
-      units.pack('U*')
+      len_bytes = Fiddle::Pointer.new(addr - 4)[0, 4].unpack1('L')
+      Fiddle::Pointer.new(addr)[0, len_bytes].dup.force_encoding('UTF-16LE').encode('UTF-8')
     end
 
     def hresult_system_message(hr)
