@@ -16,6 +16,6 @@ Rake::TestTask.new(:test) do |t|
 end
 
 task :default => :test
-if /mswin|mingw|cygwin/ =~ RbConfig::CONFIG['host_os']
+if RUBY_ENGINE == 'ruby' && /mswin|mingw|cygwin/ =~ RbConfig::CONFIG['host_os']
   task :test => :compile
 end
