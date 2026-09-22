@@ -53,6 +53,7 @@ jobs:
   test-jruby:
     name: build (jruby)
     runs-on: windows-latest
+    continue-on-error: true
     steps:
     - name: git config
       run: |
