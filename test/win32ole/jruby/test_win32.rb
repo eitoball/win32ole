@@ -104,9 +104,9 @@ class TestWin32 < Test::Unit::TestCase
     assert_raise(ArgumentError) { W.dispatch_plan('compareMode=', [1, 2]) }
   end
 
-  def test_dispatch_plan_with_args_uses_method
+  def test_dispatch_plan_with_args_uses_method_and_propertyget
     plan = W.dispatch_plan('Add', ['k', 'v'])
-    assert_equal(W::DISPATCH_METHOD, plan[:wflags])
+    assert_equal(W::DISPATCH_METHOD | W::DISPATCH_PROPERTYGET, plan[:wflags])
     assert_equal(false, plan[:named_put])
   end
 
