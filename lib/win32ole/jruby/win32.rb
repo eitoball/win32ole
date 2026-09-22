@@ -1,4 +1,170 @@
+require 'fiddle'
+
 class WIN32OLE
   module Win32
+    STDCALL = if Fiddle::Function.const_defined?(:STDCALL)
+                Fiddle::Function::STDCALL
+              else
+                Fiddle::Function::DEFAULT
+              end
+
+    VOIDP = Fiddle::TYPE_VOIDP
+    LONG  = Fiddle::TYPE_LONG
+    DWORD = -Fiddle::TYPE_INT
+    WORD  = -Fiddle::TYPE_SHORT
+    VOID  = Fiddle::TYPE_VOID
+
+    PTR_SIZE     = Fiddle::SIZEOF_VOIDP
+    PACK_PTR     = PTR_SIZE == 8 ? 'Q' : 'L' # native pointer width, for packing real structs (DISPPARAMS, pointer arrays) — NOT for a VARIANT's 8-byte value slot, which always uses 'Q' regardless of platform (see pack_pointer)
+    VARIANT_SIZE = PTR_SIZE == 8 ? 24 : 16
+
+    VT_EMPTY    = 0
+    VT_I4       = 3
+    VT_R8       = 5
+    VT_BSTR     = 8
+    VT_DISPATCH = 9
+    VT_BOOL     = 11
+    VT_UNKNOWN  = 13
+    VT_I8       = 20
+
+    DISPATCH_METHOD      = 1
+    DISPATCH_PROPERTYGET = 2
+    DISPATCH_PROPERTYPUT = 4
+    DISPID_PROPERTYPUT   = -3
+
+    CLSCTX_INPROC_SERVER = 0x1
+    CLSCTX_LOCAL_SERVER  = 0x4
+
+    IID_NULL      = ("\x00" * 16).b
+    IID_IDISPATCH = [0x00020400, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46].pack('LSSC8')
+
+    VT_FOR_TYPE = {
+      i4: VT_I4, i8: VT_I8, r8: VT_R8, bool: VT_BOOL,
+      empty: VT_EMPTY, bstr: VT_BSTR, dispatch: VT_DISPATCH
+    }.freeze
+
+    INT32_RANGE = (-(2**31))..(2**31 - 1)
+
+    # EXCEPINFO (oaidl.h): WORD wCode; WORD wReserved; BSTR bstrSource;
+    # BSTR bstrDescription; BSTR bstrHelpFile; DWORD dwHelpContext;
+    # PVOID pvReserved; HRESULT(*pfnDeferredFillIn)(...); SCODE scode;
+    if PTR_SIZE == 8
+      EXCEPINFO_SIZE = 64
+      EXCEPINFO_OFFSETS = {
+        wCode: 0, bstrSource: 8, bstrDescription: 16, bstrHelpFile: 24,
+        dwHelpContext: 32, pvReserved: 40, pfnDeferredFillIn: 48, scode: 56
+      }.freeze
+    else
+      EXCEPINFO_SIZE = 32
+      EXCEPINFO_OFFSETS = {
+        wCode: 0, bstrSource: 4, bstrDescription: 8, bstrHelpFile: 12,
+        dwHelpContext: 16, pvReserved: 20, pfnDeferredFillIn: 24, scode: 28
+      }.freeze
+    end
+
+    module_function
+
+    def wstr(str)
+      "#{str}\x00".encode('UTF-16LE').b
+    end
+
+    def pack_variant(vt, payload)
+      payload = payload.b
+      unless payload.bytesize == 8
+        raise ArgumentError, "payload must be 8 bytes, got #{payload.bytesize}"
+      end
+
+      [vt, 0, 0, 0].pack('S4') + payload + ("\x00".b * (VARIANT_SIZE - 16))
+    end
+
+    def unpack_variant(bytes)
+      vt, = bytes.unpack1('S')
+      [vt, bytes[8, 8]]
+    end
+
+    def pack_i4(value)    = [value].pack('l') + ("\x00".b * 4)
+    def pack_i8(value)    = [value].pack('q')
+    def pack_r8(value)    = [value].pack('d')
+    def pack_bool(value)  = [value ? -1 : 0].pack('s') + ("\x00".b * 6)
+    def pack_pointer(addr) = [addr].pack('Q')
+    def pack_empty        = "\x00".b * 8
+
+    def unpack_i4(payload)    = payload.unpack1('l')
+    def unpack_i8(payload)    = payload.unpack1('q')
+    def unpack_r8(payload)    = payload.unpack1('d')
+    def unpack_bool(payload)  = payload.unpack1('s') != 0
+    def unpack_pointer(payload) = payload.unpack1('Q')
+
+    def ruby_to_variant_type(value)
+      case value
+      when String then :bstr
+      when Integer then INT32_RANGE.cover?(value) ? :i4 : :i8
+      when Float then :r8
+      when true, false then :bool
+      when nil then :empty
+      when ::WIN32OLE then :dispatch
+      else
+        raise TypeError, "unsupported argument type for OLE call: #{value.class}"
+      end
+    end
+
+    def variant_ruby_type(vt)
+      case vt
+      when VT_EMPTY then :empty
+      when VT_I4 then :i4
+      when VT_I8 then :i8
+      when VT_R8 then :r8
+      when VT_BOOL then :bool
+      when VT_BSTR then :bstr
+      when VT_DISPATCH, VT_UNKNOWN then :dispatch
+      else
+        raise NotImplementedError, "VARTYPE #{vt} is not supported yet"
+      end
+    end
+
+    def dispatch_plan(name, args)
+      if name.end_with?('=')
+        unless args.size == 1
+          raise ArgumentError, "property put takes exactly one argument, got #{args.size}"
+        end
+
+        { name: name[0..-2], wflags: DISPATCH_PROPERTYPUT, named_put: true }
+      elsif args.empty?
+        { name: name, wflags: DISPATCH_METHOD | DISPATCH_PROPERTYGET, named_put: false }
+      else
+        { name: name, wflags: DISPATCH_METHOD, named_put: false }
+      end
+    end
+
+    def failed?(hr)
+      hr.negative?
+    end
+
+    def hr_hex(hr)
+      format('0x%08x', hr & 0xFFFFFFFF)
+    end
+
+    def method_error_message(method_name, detail)
+      "(in OLE method `#{method_name}': )#{detail}"
+    end
+
+    def property_put_error_message(property_name, detail)
+      "(in setting property `#{property_name}': )#{detail}"
+    end
+
+    def unknown_server_error_message(server_name)
+      "unknown OLE server: `#{server_name}'"
+    end
+
+    def parse_excepinfo(bytes)
+      o = EXCEPINFO_OFFSETS
+      ptr_fmt = PTR_SIZE == 8 ? 'Q' : 'L'
+      {
+        w_code: bytes[o[:wCode], 2].unpack1('S'),
+        bstr_source_ptr: bytes[o[:bstrSource], PTR_SIZE].unpack1(ptr_fmt),
+        bstr_description_ptr: bytes[o[:bstrDescription], PTR_SIZE].unpack1(ptr_fmt),
+        scode: bytes[o[:scode], 4].unpack1('l')
+      }
+    end
   end
 end
