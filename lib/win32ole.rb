@@ -1,5 +1,9 @@
 begin
-  require 'win32ole.so'
+  if RUBY_ENGINE == 'jruby'
+    require 'win32ole/jruby'
+  else
+    require 'win32ole.so'
+  end
 rescue LoadError
   # do nothing
 end
@@ -25,7 +29,7 @@ if defined?(WIN32OLE)
 
     def ole_methods_safely
       ole_methods
-    rescue WIN32OLE::QueryInterfaceError
+    rescue WIN32OLE::QueryInterfaceError, NoMethodError
       []
     end
   end
