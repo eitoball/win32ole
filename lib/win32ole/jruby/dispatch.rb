@@ -6,6 +6,8 @@ class WIN32OLE
     W = WIN32OLE::Win32
 
     def dispid_for(name)
+      raise WIN32OLE::RuntimeError, 'this WIN32OLE object has already been released' if @ptr.nil? || @ptr.zero?
+
       name_buf = W.wstr(name)
       names = [W.native_address_of(name_buf)].pack(W::PACK_PTR)
       dispids = ("\x00" * 4).b
@@ -19,9 +21,12 @@ class WIN32OLE
     # callers build the user-facing error message (they know whether this
     # was a method call or a property-put, which changes the message).
     def ole_invoke(dispid, arg_values, wflags, named_put: false)
-      keep_alive = native_buffers
+      raise WIN32OLE::RuntimeError, 'this WIN32OLE object has already been released' if @ptr.nil? || @ptr.zero?
 
-      arg_variants = arg_values.reverse.map { |v| ruby_value_to_variant_bytes(v, keep_alive) }
+      keep_alive = []
+      bstrs_to_free = []
+
+      arg_variants = arg_values.reverse.map { |v| ruby_value_to_variant_bytes(v, bstrs_to_free) }
       args_blob = arg_variants.join
       keep_alive << args_blob unless args_blob.empty?
 
@@ -46,6 +51,7 @@ class WIN32OLE
       result = ("\x00" * W::VARIANT_SIZE).b
 
       hr = invoke_fn.call(@ptr, dispid, W::IID_NULL, 0, wflags, dispparams, result, excepinfo, nil)
+      bstrs_to_free.each { |bstr| W.sys_free_string.call(bstr) }
       [hr, result, excepinfo]
     end
 

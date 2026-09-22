@@ -7,6 +7,12 @@ class WIN32OLE
   RuntimeError = Class.new(::RuntimeError)
   QueryInterfaceError = Class.new(RuntimeError)
 
+  ::Object.const_set(:WIN32OLERuntimeError, RuntimeError)
+  ::Object.deprecate_constant(:WIN32OLERuntimeError)
+
+  ::Object.const_set(:WIN32OLEQueryInterfaceError, QueryInterfaceError)
+  ::Object.deprecate_constant(:WIN32OLEQueryInterfaceError)
+
   include Dispatch
 
   W = Win32
@@ -29,10 +35,6 @@ class WIN32OLE
 
     @ptr = ppv.unpack1(W::PTR_SIZE == 8 ? 'Q' : 'L')
     install_finalizer
-  end
-
-  def native_buffers
-    @native_buffers ||= []
   end
 
   private
@@ -93,7 +95,7 @@ class WIN32OLE
     !dispid_for(name.to_s.sub(/=\z/, '')).nil? || super
   end
 
-  def ruby_value_to_variant_bytes(value, keep_alive)
+  def ruby_value_to_variant_bytes(value, bstrs_to_free)
     type = W.ruby_to_variant_type(value)
     payload =
       case type
@@ -104,7 +106,7 @@ class WIN32OLE
       when :empty then W.pack_empty
       when :bstr
         bstr = W.sys_alloc_string.call(W.wstr(value))
-        keep_alive << bstr
+        bstrs_to_free << bstr
         W.pack_pointer(bstr)
       when :dispatch
         W.pack_pointer(value.instance_variable_get(:@ptr))
