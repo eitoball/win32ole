@@ -203,6 +203,21 @@ class WIN32OLE
       )
     end
 
+    def prog_id_from_clsid_fn
+      @prog_id_from_clsid_fn ||= Fiddle::Function.new(oleaut32['ProgIDFromCLSID'], [VOIDP, VOIDP], LONG, STDCALL)
+    end
+
+    def prog_id_from_clsid(clsid_bytes)
+      out = ("\x00" * PTR_SIZE).b
+      hr = prog_id_from_clsid_fn.call(clsid_bytes, out)
+      return nil if failed?(hr)
+
+      bstr = out.unpack1(PACK_PTR)
+      str = bstr_to_s(bstr)
+      sys_free_string.call(bstr) unless bstr.zero?
+      str
+    end
+
     def sys_alloc_string
       @sys_alloc_string ||= Fiddle::Function.new(oleaut32['SysAllocString'], [VOIDP], VOIDP, STDCALL)
     end
