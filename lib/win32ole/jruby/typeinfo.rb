@@ -216,5 +216,30 @@ class WIN32OLE
         itypelib_ptr, ITYPELIB_VTBL[:ReleaseTLibAttr], [W::VOIDP, W::VOIDP], W::VOID
       )
     end
+
+    HKEY_CLASSES_ROOT = 0x80000000
+    KEY_READ = 0x20019
+    REG_SZ = 1
+
+    def advapi32
+      @advapi32 ||= Fiddle.dlopen('advapi32')
+    end
+
+    def reg_open_key_ex
+      @reg_open_key_ex ||= Fiddle::Function.new(
+        advapi32['RegOpenKeyExW'], [W::VOIDP, W::VOIDP, W::DWORD, W::DWORD, W::VOIDP], W::LONG, W::STDCALL
+      )
+    end
+
+    def reg_query_value_ex
+      @reg_query_value_ex ||= Fiddle::Function.new(
+        advapi32['RegQueryValueExW'],
+        [W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP], W::LONG, W::STDCALL
+      )
+    end
+
+    def reg_close_key
+      @reg_close_key ||= Fiddle::Function.new(advapi32['RegCloseKey'], [W::VOIDP], W::LONG, W::STDCALL)
+    end
   end
 end
