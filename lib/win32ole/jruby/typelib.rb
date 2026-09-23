@@ -9,7 +9,8 @@ class WIN32OLE
     TI = TypeInfo
     private_constant :W, :TI
 
-    LIBFLAG_FHIDDEN = 0x1
+    LIBFLAG_FRESTRICTED = 0x1
+    LIBFLAG_FHIDDEN = 0x4
 
     def initialize(itypelib_ptr)
       @ptr = itypelib_ptr
@@ -36,11 +37,11 @@ class WIN32OLE
     def guid
       d1, d2, d3 = @guid_bytes.unpack('LSS')
       d4 = @guid_bytes[8, 8].unpack('C8')
-      format('{%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}', d1, d2, d3, *d4)
+      format('{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}', d1, d2, d3, *d4)
     end
 
     def name
-      @name
+      @helpstring
     end
 
     def version
@@ -56,7 +57,7 @@ class WIN32OLE
     end
 
     def visible?
-      (@lib_flags & LIBFLAG_FHIDDEN) == 0
+      !(@lib_flags.zero? || (@lib_flags & (LIBFLAG_FRESTRICTED | LIBFLAG_FHIDDEN)) != 0)
     end
 
     def library_name
