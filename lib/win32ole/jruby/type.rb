@@ -127,6 +127,34 @@ class WIN32OLE
       "#<WIN32OLE::Type:#{name}>"
     end
 
+    def implemented_ole_types
+      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+    end
+
+    def source_ole_types
+      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+    end
+
+    def default_event_sources
+      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+    end
+
+    def default_ole_types
+      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+    end
+
+    def self.ole_classes(typelib)
+      raise NotImplementedError, 'registry enumeration is not implemented yet (Phase 2 non-goal)'
+    end
+
+    def self.typelibs
+      raise NotImplementedError, 'registry enumeration is not implemented yet (Phase 2 non-goal)'
+    end
+
+    def self.progids
+      raise NotImplementedError, 'registry enumeration is not implemented yet (Phase 2 non-goal)'
+    end
+
     private
 
     def type_attr_func_count

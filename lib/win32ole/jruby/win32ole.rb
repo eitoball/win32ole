@@ -167,6 +167,18 @@ class WIN32OLE
     !dispid_for(name.to_s).nil?
   end
 
+  def ole_method_help(*)
+    raise NotImplementedError, 'launching help files is not implemented (Phase 2 non-goal)'
+  end
+
+  def ole_obj_help
+    raise NotImplementedError, 'launching help files is not implemented (Phase 2 non-goal)'
+  end
+
+  def ole_query_interface(*)
+    raise NotImplementedError, 'arbitrary QueryInterface is not implemented (Phase 2 non-goal)'
+  end
+
   private
 
   def wrap_dispatch_pointer(ptr)

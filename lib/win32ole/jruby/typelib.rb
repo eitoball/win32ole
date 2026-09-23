@@ -83,6 +83,10 @@ class WIN32OLE
       "#<WIN32OLE::TypeLib:#{name}>"
     end
 
+    def self.typelibs
+      raise NotImplementedError, 'registry enumeration is not implemented yet (Phase 2 non-goal)'
+    end
+
     private
 
     def read_documentation(itypelib_ptr, index)

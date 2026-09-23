@@ -112,6 +112,14 @@ class WIN32OLE
       "#<WIN32OLE::Method:#{name}>"
     end
 
+    def event?
+      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+    end
+
+    def event_interface
+      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+    end
+
     private
 
     def read_names(itypeinfo_ptr, memid, cparams)
