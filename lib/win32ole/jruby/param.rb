@@ -54,7 +54,7 @@ class WIN32OLE
 
     def default
       return nil unless (@param_flags & PARAMFLAG_FHASDEFAULT) != 0
-      return nil if @paramdescex_ptr.nil? || @paramdescex_ptr.zero?
+      return nil if @paramdescex_ptr.to_i.zero?
 
       # PARAMDESCEX is { ULONG cBytes; VARIANTARG varDefaultValue; } — the
       # VARIANTARG starts 4 bytes into the struct, right after cBytes.
