@@ -9,7 +9,9 @@ class WIN32OLE
     TI = TypeInfo
     private_constant :W, :TI
 
+    FUNCFLAG_FRESTRICTED = 0x1
     FUNCFLAG_FHIDDEN = 0x40 # per MEMBERID/FUNCFLAGS, distinct from TYPEFLAG's own 0x10
+    FUNCFLAG_FNONBROWSABLE = 0x400
 
     def initialize(itypeinfo_ptr, index)
       funcdesc_out = ("\x00" * W::PTR_SIZE).b
@@ -30,6 +32,7 @@ class WIN32OLE
       @return_vt = funcdesc.ret_tdesc_vt
 
       @name, param_names = read_names(itypeinfo_ptr, @memid, funcdesc.cParams)
+      @helpstring, @help_context, @helpfile = read_documentation(itypeinfo_ptr, @memid)
 
       # lprgelemdescParam is a POINTER FIELD inside FUNCDESC — its value is
       # the address of a contiguous array of cParams ELEMDESC structs, not
@@ -70,11 +73,23 @@ class WIN32OLE
     end
 
     def visible?
-      (@func_flags & FUNCFLAG_FHIDDEN) == 0
+      (@func_flags & (FUNCFLAG_FRESTRICTED | FUNCFLAG_FHIDDEN | FUNCFLAG_FNONBROWSABLE)) == 0
     end
 
     def dispid
       @dispid
+    end
+
+    def helpstring
+      @helpstring
+    end
+
+    def helpfile
+      @helpfile
+    end
+
+    def helpcontext
+      @help_context
     end
 
     def offset_vtbl
@@ -119,6 +134,23 @@ class WIN32OLE
         itypeinfo_ptr, TI::ITYPEINFO_VTBL[:GetNames],
         [W::VOIDP, W::LONG, W::VOIDP, W::DWORD, W::VOIDP], W::LONG
       )
+    end
+
+    def read_documentation(itypeinfo_ptr, memid)
+      name_out = ("\x00" * W::PTR_SIZE).b
+      docstring_out = ("\x00" * W::PTR_SIZE).b
+      helpcontext_out = ("\x00" * 4).b
+      helpfile_out = ("\x00" * W::PTR_SIZE).b
+      TI.documentation_fn_for_typeinfo(itypeinfo_ptr).call(
+        itypeinfo_ptr, memid, name_out, docstring_out, helpcontext_out, helpfile_out
+      )
+      name_bstr = name_out.unpack1(W::PACK_PTR)
+      docstring_bstr = docstring_out.unpack1(W::PACK_PTR)
+      helpfile_bstr = helpfile_out.unpack1(W::PACK_PTR)
+      helpstring = W.bstr_to_s(docstring_bstr)
+      helpfile = W.bstr_to_s(helpfile_bstr)
+      [name_bstr, docstring_bstr, helpfile_bstr].each { |b| W.sys_free_string.call(b) unless b.zero? }
+      [helpstring, helpcontext_out.unpack1('L'), helpfile]
     end
   end
 end
