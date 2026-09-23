@@ -38,10 +38,10 @@ class WIN32OLE
     VARDESC = struct([
       'int memid', 'char _pad1[4]',  # memid + padding to align lpstrSchema
       'void *lpstrSchema', 'void *union_oInst_or_lpvarValue',
-      # elemdescVar (ELEMDESC, inlined)
-      'void *tdesc_union_ptr', 'unsigned short tdesc_vt', 'char _pad2[6]',
-      'void *paramdescex_ptr', 'unsigned short wParamFlags',
-      'unsigned short wVarFlags', 'char _pad3[6]', 'int varkind'
+      # elemdescVar (ELEMDESC, inlined) — full 32-byte block: TYPEDESC (16) + PARAMDESC/IDLDESC (16)
+      'void *tdesc_union_ptr', 'unsigned short tdesc_vt', 'char _pad2[6]',  # TYPEDESC: 8+2+6=16
+      'void *paramdescex_ptr', 'unsigned short wParamFlags', 'char _pad3[6]',  # PARAMDESC/IDLDESC: 8+2+6=16
+      'unsigned short wVarFlags', 'int varkind'
     ])
 
     TYPEATTR = struct([
@@ -54,9 +54,10 @@ class WIN32OLE
       'unsigned short cImplTypes', 'unsigned short cbSizeVft',
       'unsigned short cbAlignment', 'unsigned short wTypeFlags',
       'unsigned short wMajorVerNum', 'unsigned short wMinorVerNum',
-      # tdescAlias (TYPEDESC, inlined) + idldescType (IDLDESC: void* placeholder + DWORD + WORD)
-      'void *tdescAlias_union_ptr', 'unsigned short tdescAlias_vt',
-      'unsigned int idldescType_dwReserved', 'unsigned short idldescType_wIDLFlags'
+      # tdescAlias (TYPEDESC, inlined) — complete 16-byte block with trailing padding
+      'void *tdescAlias_union_ptr', 'unsigned short tdescAlias_vt', 'char _pad1[6]',
+      # idldescType (IDLDESC: ULONG_PTR dwReserved + USHORT wIDLFlags)
+      'void *idldescType_dwReserved', 'unsigned short idldescType_wIDLFlags'
     ])
   end
 end
