@@ -35,6 +35,8 @@ class WIN32OLE
     CLSCTX_INPROC_SERVER = 0x1
     CLSCTX_LOCAL_SERVER  = 0x4
 
+    LOCALE_SYSTEM_DEFAULT = 0x0800
+
     IID_NULL      = ("\x00" * 16).b
     IID_IDISPATCH = [0x00020400, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46].pack('LSSC8')
 

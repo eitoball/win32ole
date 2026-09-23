@@ -134,6 +134,39 @@ class WIN32OLE
     end
   end
 
+  public
+
+  def ole_type
+    type_info_ptr = get_type_info_ptr
+    raise WIN32OLE::QueryInterfaceError, 'failed to GetTypeInfo' if type_info_ptr.nil?
+
+    Type.new(type_info_ptr)
+  end
+
+  def ole_typelib
+    ole_type.ole_typelib
+  end
+
+  def ole_methods
+    ole_methods_by_invkind(nil)
+  end
+
+  def ole_get_methods
+    ole_methods_by_invkind(TypeInfo::INVOKE_PROPERTYGET)
+  end
+
+  def ole_put_methods
+    ole_methods_by_invkind(TypeInfo::INVOKE_PROPERTYPUT | TypeInfo::INVOKE_PROPERTYPUTREF)
+  end
+
+  def ole_func_methods
+    ole_methods_by_invkind(TypeInfo::INVOKE_FUNC)
+  end
+
+  def ole_respond_to?(name)
+    !dispid_for(name.to_s).nil?
+  end
+
   private
 
   def wrap_dispatch_pointer(ptr)
@@ -153,5 +186,33 @@ class WIN32OLE
     else
       "\n#{hresult_detail(hr)}"
     end
+  end
+
+  def get_type_info_ptr
+    out = ("\x00" * W::PTR_SIZE).b
+    hr = TypeInfo.get_type_info_fn(@ptr).call(@ptr, 0, W::LOCALE_SYSTEM_DEFAULT, out)
+    return nil if W.failed?(hr)
+
+    out.unpack1(W::PACK_PTR)
+  end
+
+  def ole_methods_by_invkind(mask)
+    type_via_containing_typelib.ole_methods.select do |m|
+      mask.nil? || (m.invkind & mask) != 0
+    end
+  end
+
+  # Ports ext/win32ole/win32ole.c's typeinfo_from_ole: GetTypeInfo →
+  # GetDocumentation (this type's own name) → GetContainingTypeLib →
+  # scan the typelib for the entry with a matching name → GetTypeInfo(i)
+  # again. See design spec §1.1/§8 risk #3 for why this round-trip exists
+  # instead of just reusing the first ITypeInfo* the way #ole_type does —
+  # ported as-is rather than "simplified" without understanding it.
+  def type_via_containing_typelib
+    first_type = ole_type
+    target_name = first_type.name
+    tlib = first_type.ole_typelib
+    match = tlib.ole_types.find { |t| t.name == target_name }
+    match || first_type
   end
 end
