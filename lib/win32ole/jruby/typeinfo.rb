@@ -106,5 +106,115 @@ class WIN32OLE
         'UNKNOWN'
       end
     end
+
+    W = Win32
+    private_constant :W
+
+    def get_type_info_fn(idispatch_ptr)
+      @get_type_info_fns ||= {}
+      @get_type_info_fns[idispatch_ptr] ||= W.vtable_function(
+        idispatch_ptr, 4, [W::VOIDP, W::DWORD, W::DWORD, W::VOIDP], W::LONG
+      )
+    end
+
+    def type_attr_fn(itypeinfo_ptr)
+      @type_attr_fns ||= {}
+      @type_attr_fns[itypeinfo_ptr] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetTypeAttr], [W::VOIDP, W::VOIDP], W::LONG
+      )
+    end
+
+    def func_desc_fn(itypeinfo_ptr)
+      @func_desc_fns ||= {}
+      @func_desc_fns[itypeinfo_ptr] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetFuncDesc], [W::VOIDP, W::DWORD, W::VOIDP], W::LONG
+      )
+    end
+
+    def var_desc_fn(itypeinfo_ptr)
+      @var_desc_fns ||= {}
+      @var_desc_fns[itypeinfo_ptr] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetVarDesc], [W::VOIDP, W::DWORD, W::VOIDP], W::LONG
+      )
+    end
+
+    def documentation_fn_for_typeinfo(itypeinfo_ptr)
+      @documentation_fns ||= {}
+      @documentation_fns[itypeinfo_ptr] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetDocumentation],
+        [W::VOIDP, W::LONG, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP], W::LONG
+      )
+    end
+
+    def containing_typelib_fn(itypeinfo_ptr)
+      @containing_typelib_fns ||= {}
+      @containing_typelib_fns[itypeinfo_ptr] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetContainingTypeLib], [W::VOIDP, W::VOIDP, W::VOIDP], W::LONG
+      )
+    end
+
+    def release_type_attr_fn(itypeinfo_ptr)
+      @release_type_attr_fns ||= {}
+      @release_type_attr_fns[itypeinfo_ptr] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:ReleaseTypeAttr], [W::VOIDP, W::VOIDP], W::VOID
+      )
+    end
+
+    def release_func_desc_fn(itypeinfo_ptr)
+      @release_func_desc_fns ||= {}
+      @release_func_desc_fns[itypeinfo_ptr] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:ReleaseFuncDesc], [W::VOIDP, W::VOIDP], W::VOID
+      )
+    end
+
+    def release_var_desc_fn(itypeinfo_ptr)
+      @release_var_desc_fns ||= {}
+      @release_var_desc_fns[itypeinfo_ptr] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:ReleaseVarDesc], [W::VOIDP, W::VOIDP], W::VOID
+      )
+    end
+
+    def ref_type_info_fn(itypeinfo_ptr)
+      @ref_type_info_fns ||= {}
+      @ref_type_info_fns[itypeinfo_ptr] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetRefTypeInfo], [W::VOIDP, W::DWORD, W::VOIDP], W::LONG
+      )
+    end
+
+    def type_info_count_fn(itypelib_ptr)
+      @type_info_count_fns ||= {}
+      @type_info_count_fns[itypelib_ptr] ||= W.vtable_function(
+        itypelib_ptr, ITYPELIB_VTBL[:GetTypeInfoCount], [W::VOIDP], W::DWORD
+      )
+    end
+
+    def type_info_fn(itypelib_ptr)
+      @type_info_fns ||= {}
+      @type_info_fns[itypelib_ptr] ||= W.vtable_function(
+        itypelib_ptr, ITYPELIB_VTBL[:GetTypeInfo], [W::VOIDP, W::DWORD, W::VOIDP], W::LONG
+      )
+    end
+
+    def lib_attr_fn(itypelib_ptr)
+      @lib_attr_fns ||= {}
+      @lib_attr_fns[itypelib_ptr] ||= W.vtable_function(
+        itypelib_ptr, ITYPELIB_VTBL[:GetLibAttr], [W::VOIDP, W::VOIDP], W::LONG
+      )
+    end
+
+    def documentation_fn_for_typelib(itypelib_ptr)
+      @typelib_documentation_fns ||= {}
+      @typelib_documentation_fns[itypelib_ptr] ||= W.vtable_function(
+        itypelib_ptr, ITYPELIB_VTBL[:GetDocumentation],
+        [W::VOIDP, W::LONG, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP], W::LONG
+      )
+    end
+
+    def release_tlib_attr_fn(itypelib_ptr)
+      @release_tlib_attr_fns ||= {}
+      @release_tlib_attr_fns[itypelib_ptr] ||= W.vtable_function(
+        itypelib_ptr, ITYPELIB_VTBL[:ReleaseTLibAttr], [W::VOIDP, W::VOIDP], W::VOID
+      )
+    end
   end
 end
