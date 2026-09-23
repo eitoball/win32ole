@@ -131,7 +131,10 @@ class WIN32OLE
 
     def type_attr_func_count
       attr_out = ("\x00" * W::PTR_SIZE).b
-      TI.type_attr_fn(@ptr).call(@ptr, attr_out)
+      hr = TI.type_attr_fn(@ptr).call(@ptr, attr_out)
+      if W.failed?(hr)
+        raise WIN32OLE::QueryInterfaceError, W.query_interface_error_message('GetTypeAttr', W.hr_hex(hr))
+      end
       attr_ptr = attr_out.unpack1(W::PACK_PTR)
       count = TI::TYPEATTR.new(attr_ptr).cFuncs
       TI.release_type_attr_fn(@ptr).call(@ptr, attr_ptr)
@@ -140,7 +143,10 @@ class WIN32OLE
 
     def type_attr_var_count
       attr_out = ("\x00" * W::PTR_SIZE).b
-      TI.type_attr_fn(@ptr).call(@ptr, attr_out)
+      hr = TI.type_attr_fn(@ptr).call(@ptr, attr_out)
+      if W.failed?(hr)
+        raise WIN32OLE::QueryInterfaceError, W.query_interface_error_message('GetTypeAttr', W.hr_hex(hr))
+      end
       attr_ptr = attr_out.unpack1(W::PACK_PTR)
       count = TI::TYPEATTR.new(attr_ptr).cVars
       TI.release_type_attr_fn(@ptr).call(@ptr, attr_ptr)
