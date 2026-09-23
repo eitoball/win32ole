@@ -111,4 +111,66 @@ class TestTypeInfo < Test::Unit::TestCase
   ensure
     Fiddle.free(buf.to_ptr) if buf.respond_to?(:to_ptr)
   end
+
+  def test_itypeinfo_vtbl_slots
+    assert_equal(3, TI::ITYPEINFO_VTBL[:GetTypeAttr])
+    assert_equal(5, TI::ITYPEINFO_VTBL[:GetFuncDesc])
+    assert_equal(6, TI::ITYPEINFO_VTBL[:GetVarDesc])
+    assert_equal(12, TI::ITYPEINFO_VTBL[:GetDocumentation])
+    assert_equal(14, TI::ITYPEINFO_VTBL[:GetRefTypeInfo])
+    assert_equal(18, TI::ITYPEINFO_VTBL[:GetContainingTypeLib])
+    assert_equal(19, TI::ITYPEINFO_VTBL[:ReleaseTypeAttr])
+    assert_equal(20, TI::ITYPEINFO_VTBL[:ReleaseFuncDesc])
+    assert_equal(21, TI::ITYPEINFO_VTBL[:ReleaseVarDesc])
+  end
+
+  def test_itypelib_vtbl_slots
+    assert_equal(3, TI::ITYPELIB_VTBL[:GetTypeInfoCount])
+    assert_equal(4, TI::ITYPELIB_VTBL[:GetTypeInfo])
+    assert_equal(7, TI::ITYPELIB_VTBL[:GetLibAttr])
+    assert_equal(9, TI::ITYPELIB_VTBL[:GetDocumentation])
+    assert_equal(12, TI::ITYPELIB_VTBL[:ReleaseTLibAttr])
+  end
+
+  def test_typekind_names
+    assert_equal('Enum', TI::TYPEKIND_NAMES[0])
+    assert_equal('Dispatch', TI::TYPEKIND_NAMES[4])
+    assert_equal('Max', TI::TYPEKIND_NAMES[8])
+    assert_nil(TI::TYPEKIND_NAMES[99])
+  end
+
+  def test_varkind_names
+    assert_equal('PERINSTANCE', TI::VARKIND_NAMES[0])
+    assert_equal('CONSTANT', TI::VARKIND_NAMES[2])
+    assert_nil(TI::VARKIND_NAMES[99])
+  end
+
+  def test_invoke_kind_name_property_when_get_and_put_both_set
+    assert_equal('PROPERTY', TI.invoke_kind_name(0x2 | 0x4))
+  end
+
+  def test_invoke_kind_name_propertyget_only
+    assert_equal('PROPERTYGET', TI.invoke_kind_name(0x2))
+  end
+
+  def test_invoke_kind_name_propertyput_only
+    assert_equal('PROPERTYPUT', TI.invoke_kind_name(0x4))
+  end
+
+  def test_invoke_kind_name_propertyputref_only
+    assert_equal('PROPERTYPUTREF', TI.invoke_kind_name(0x8))
+  end
+
+  def test_invoke_kind_name_func_only
+    assert_equal('FUNC', TI.invoke_kind_name(0x1))
+  end
+
+  def test_invoke_kind_name_unknown_bitmask
+    assert_equal('UNKNOWN', TI.invoke_kind_name(0))
+  end
+
+  def test_query_interface_error_message_matches_method_error_message_shape
+    msg = WIN32OLE::Win32.query_interface_error_message('GetTypeInfo', 'boom')
+    assert_match(/\Afailed to GetTypeInfo: boom\z/, msg)
+  end
 end
