@@ -59,5 +59,52 @@ class WIN32OLE
       # idldescType (IDLDESC: ULONG_PTR dwReserved + USHORT wIDLFlags)
       'void *idldescType_dwReserved', 'unsigned short idldescType_wIDLFlags'
     ])
+
+    ITYPEINFO_VTBL = {
+      GetTypeAttr: 3, GetFuncDesc: 5, GetVarDesc: 6, GetNames: 7,
+      GetRefTypeOfImplType: 8, GetImplTypeFlags: 9, GetIDsOfNames: 10,
+      Invoke: 11, GetDocumentation: 12, GetDllEntry: 13, GetRefTypeInfo: 14,
+      AddressOfMember: 15, CreateInstance: 16, GetMops: 17,
+      GetContainingTypeLib: 18, ReleaseTypeAttr: 19, ReleaseFuncDesc: 20,
+      ReleaseVarDesc: 21
+    }.freeze
+
+    ITYPELIB_VTBL = {
+      GetTypeInfoCount: 3, GetTypeInfo: 4, GetTypeInfoType: 5,
+      GetTypeInfoOfGuid: 6, GetLibAttr: 7, GetTypeComp: 8,
+      GetDocumentation: 9, IsName: 10, FindName: 11, ReleaseTLibAttr: 12
+    }.freeze
+
+    TYPEKIND_NAMES = {
+      0 => 'Enum', 1 => 'Record', 2 => 'Module', 3 => 'Interface',
+      4 => 'Dispatch', 5 => 'Class', 6 => 'Alias', 7 => 'Union', 8 => 'Max'
+    }.freeze
+
+    VARKIND_NAMES = {
+      0 => 'PERINSTANCE', 1 => 'STATIC', 2 => 'CONSTANT', 3 => 'DISPATCH'
+    }.freeze
+
+    INVOKE_FUNC = 0x1
+    INVOKE_PROPERTYGET = 0x2
+    INVOKE_PROPERTYPUT = 0x4
+    INVOKE_PROPERTYPUTREF = 0x8
+
+    module_function
+
+    def invoke_kind_name(invkind)
+      if (invkind & INVOKE_PROPERTYGET != 0) && (invkind & INVOKE_PROPERTYPUT != 0)
+        'PROPERTY'
+      elsif invkind & INVOKE_PROPERTYGET != 0
+        'PROPERTYGET'
+      elsif invkind & INVOKE_PROPERTYPUT != 0
+        'PROPERTYPUT'
+      elsif invkind & INVOKE_PROPERTYPUTREF != 0
+        'PROPERTYPUTREF'
+      elsif invkind & INVOKE_FUNC != 0
+        'FUNC'
+      else
+        'UNKNOWN'
+      end
+    end
   end
 end

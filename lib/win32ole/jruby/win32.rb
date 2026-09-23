@@ -150,6 +150,10 @@ class WIN32OLE
       "(in setting property `#{property_name}': )#{detail}"
     end
 
+    def query_interface_error_message(operation, detail)
+      "failed to #{operation}: #{detail}"
+    end
+
     def unknown_server_error_message(server_name)
       "unknown OLE server: `#{server_name}'"
     end
