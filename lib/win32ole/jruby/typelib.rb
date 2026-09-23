@@ -107,7 +107,15 @@ class WIN32OLE
       # path must NOT be prefixed with "SOFTWARE\Classes\" (that prefix is
       # only needed when opening under HKEY_LOCAL_MACHINE/HKEY_CURRENT_USER
       # directly, as MRI's own clsid_from_remote does for the DCOM path).
-      key_path = W.wstr("TypeLib\\#{guid_str}\\#{version_str}\\#{lcid}\\win32")
+      %w[win64 win32 win16].each do |arch_key|
+        path = reg_path_lookup_one(guid_str, version_str, lcid, arch_key)
+        return path if path
+      end
+      nil
+    end
+
+    def reg_path_lookup_one(guid_str, version_str, lcid, arch_key)
+      key_path = W.wstr("TypeLib\\#{guid_str}\\#{version_str}\\#{lcid}\\#{arch_key}")
       hkey_out = ("\x00" * W::PTR_SIZE).b
       err = TI.reg_open_key_ex.call(TI::HKEY_CLASSES_ROOT, key_path, 0, TI::KEY_READ, hkey_out)
       return nil unless err.zero?
