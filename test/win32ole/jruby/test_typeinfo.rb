@@ -1,5 +1,7 @@
 # test/win32ole/jruby/test_typeinfo.rb
 require 'test/unit'
+
+if RUBY_ENGINE == 'jruby'
 require 'win32ole/jruby/typeinfo'
 
 class TestTypeInfo < Test::Unit::TestCase
@@ -202,4 +204,5 @@ class TestTypeInfo < Test::Unit::TestCase
     msg = WIN32OLE::Win32.query_interface_error_message('GetTypeInfo', 'boom')
     assert_match(/\Afailed to GetTypeInfo: boom\z/, msg)
   end
+end
 end
