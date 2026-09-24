@@ -27,7 +27,13 @@ class TestTypeInfo < Test::Unit::TestCase
   end
 
   def test_typeattr_size
-    assert_equal(PTR64 ? 96 : 76, TI::TYPEATTR.size)
+    # x86 is an inherited, not-re-verified risk (design spec §8 risk #5) --
+    # this plan only claims x64 correctness, the actual CI target. The x86
+    # branch here pins what TI::TYPEATTR's current (x64-oriented, hardcoded)
+    # padding actually computes on a 32-bit Fiddle::SIZEOF_VOIDP, so this
+    # assertion at least matches the code instead of a stale, disproven
+    # number -- it is not a claim that this value is C-ABI-correct on x86.
+    assert_equal(PTR64 ? 96 : 80, TI::TYPEATTR.size)
   end
 
   def test_typeattr_guid_is_at_offset_zero
@@ -167,6 +173,29 @@ class TestTypeInfo < Test::Unit::TestCase
 
   def test_invoke_kind_name_unknown_bitmask
     assert_equal('UNKNOWN', TI.invoke_kind_name(0))
+  end
+
+  def test_vartype_names_distinguishes_dispatch_and_unknown
+    # VT_DISPATCH(9) and VT_UNKNOWN(13) are genuinely different VARTYPEs;
+    # they must not resolve to the same name.
+    assert_equal('DISPATCH', TI::VARTYPE_NAMES[9])
+    assert_equal('UNKNOWN', TI::VARTYPE_NAMES[13])
+  end
+
+  def test_vartype_names_covers_common_introspection_types
+    assert_equal('VOID', TI::VARTYPE_NAMES[24])
+    assert_equal('VARIANT', TI::VARTYPE_NAMES[12])
+    assert_equal('HRESULT', TI::VARTYPE_NAMES[25])
+    assert_equal('PTR', TI::VARTYPE_NAMES[26])
+    assert_equal('USERDEFINED', TI::VARTYPE_NAMES[29])
+  end
+
+  def test_vartype_name_falls_back_for_unknown_vartype
+    assert_equal('Unknown Type 999', TI.vartype_name(999))
+  end
+
+  def test_vartype_name_uses_the_table_for_known_vartype
+    assert_equal('I4', TI.vartype_name(3))
   end
 
   def test_query_interface_error_message_matches_method_error_message_shape

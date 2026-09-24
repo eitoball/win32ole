@@ -12,8 +12,26 @@ class WIN32OLE
     LIBFLAG_FRESTRICTED = 0x1
     LIBFLAG_FHIDDEN = 0x4
 
+    # Only ever constructed by wrapping an already-obtained ITypeLib*
+    # pointer, never via a public name-based lookup (spec §3, §4.3). #new
+    # itself always raises; .from_itypelib_ptr is the one real
+    # (internal-only) construction path. See Type's identical pattern for
+    # the full rationale.
+    def self.new(*)
+      raise NotImplementedError, 'name-based construction is not implemented yet (Phase 2 non-goal)'
+    end
+
+    def self.from_itypelib_ptr(itypelib_ptr)
+      allocate.tap { |tlib| tlib.send(:initialize, itypelib_ptr) }
+    end
+
     def initialize(itypelib_ptr)
       @ptr = itypelib_ptr
+      # Install the finalizer before any call that could raise: the caller
+      # has already AddRef'd this pointer, so if GetLibAttr/read_documentation
+      # (or the vtable lookups they perform) raise, this Release must still
+      # happen -- otherwise the reference leaks permanently.
+      install_finalizer
 
       lib_attr_out = ("\x00" * W::PTR_SIZE).b
       hr = TI.lib_attr_fn(@ptr).call(@ptr, lib_attr_out)
@@ -30,8 +48,6 @@ class WIN32OLE
       TI.release_tlib_attr_fn(@ptr).call(@ptr, attr_ptr)
 
       @name, @helpstring, @help_context, @helpfile = read_documentation(@ptr, -1)
-
-      install_finalizer
     end
 
     def guid
@@ -75,7 +91,16 @@ class WIN32OLE
         hr = TI.type_info_fn(@ptr).call(@ptr, i, ti_out)
         next nil if W.failed?(hr)
 
-        WIN32OLE::Type.new(ti_out.unpack1(W::PACK_PTR))
+        begin
+          WIN32OLE::Type.from_typeinfo_ptr(ti_out.unpack1(W::PACK_PTR))
+        rescue WIN32OLE::QueryInterfaceError
+          # Matches MRI (ext/win32ole/win32ole_typelib.c's ole_types_from_typelib),
+          # which skips entries it can't build a Type for rather than
+          # failing the whole array -- one unreadable type in a typelib
+          # shouldn't break every other type (and, transitively, every
+          # object's #ole_methods) from that same library.
+          nil
+        end
       end.compact
     end
 

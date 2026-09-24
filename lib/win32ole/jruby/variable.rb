@@ -37,9 +37,7 @@ class WIN32OLE
     end
 
     def ole_type
-      W.variant_ruby_type(@vt).to_s.upcase
-    rescue NotImplementedError
-      "VT_#{@vt}"
+      TI.vartype_name(@vt)
     end
 
     def ole_type_detail
@@ -100,7 +98,7 @@ class WIN32OLE
 
     def get_names_fn(itypeinfo_ptr)
       @@get_names_fns ||= {}
-      @@get_names_fns[itypeinfo_ptr] ||= W.vtable_function(
+      @@get_names_fns[W.vtable_address(itypeinfo_ptr)] ||= W.vtable_function(
         itypeinfo_ptr, TI::ITYPEINFO_VTBL[:GetNames],
         [W::VOIDP, W::LONG, W::VOIDP, W::DWORD, W::VOIDP], W::LONG
       )

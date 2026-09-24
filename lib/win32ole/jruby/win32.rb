@@ -205,8 +205,13 @@ class WIN32OLE
       )
     end
 
+    def co_task_mem_free
+      @co_task_mem_free ||= Fiddle::Function.new(ole32['CoTaskMemFree'], [VOIDP], VOID, STDCALL)
+    end
+
     def prog_id_from_clsid_fn
-      @prog_id_from_clsid_fn ||= Fiddle::Function.new(oleaut32['ProgIDFromCLSID'], [VOIDP, VOIDP], LONG, STDCALL)
+      # ProgIDFromCLSID is an ole32 export, not oleaut32.
+      @prog_id_from_clsid_fn ||= Fiddle::Function.new(ole32['ProgIDFromCLSID'], [VOIDP, VOIDP], LONG, STDCALL)
     end
 
     def prog_id_from_clsid(clsid_bytes)
@@ -214,9 +219,15 @@ class WIN32OLE
       hr = prog_id_from_clsid_fn.call(clsid_bytes, out)
       return nil if failed?(hr)
 
-      bstr = out.unpack1(PACK_PTR)
-      str = bstr_to_s(bstr)
-      sys_free_string.call(bstr) unless bstr.zero?
+      # ProgIDFromCLSID's output is a CoTaskMemAlloc'd, NUL-terminated wide
+      # string -- NOT a BSTR. Reading it with bstr_to_s (which trusts a
+      # length prefix 4 bytes before the string) would read garbage-length
+      # data out of bounds, and freeing it with SysFreeString (the BSTR
+      # deallocator) would free CoTaskMem-allocated memory with the wrong
+      # allocator, corrupting the heap.
+      addr = out.unpack1(PACK_PTR)
+      str = wstr_to_s(addr)
+      co_task_mem_free.call(addr) unless addr.zero?
       str
     end
 
@@ -250,12 +261,24 @@ class WIN32OLE
     # bogus caller-supplied "pointer" into a clean Ruby TypeError.
     MIN_PLAUSIBLE_POINTER = 0x10000
 
-    def vtable_function(object_addr, index, arg_types, ret_type)
+    # The vtable address IS the COM object's implementation identity — every
+    # instance of the same concrete class shares one vtable. Callers that
+    # memoize a resolved Fiddle::Function should key their cache on this,
+    # not on the object's own address: after an object is released, the OS
+    # can and does reuse its heap address for an unrelated object with a
+    # different vtable, so keying by object address risks returning a
+    # function pointer resolved from the WRONG vtable for a live object
+    # that merely reused a dead one's address.
+    def vtable_address(object_addr)
       unless object_addr.is_a?(Integer) && object_addr >= MIN_PLAUSIBLE_POINTER
         raise TypeError, "expected a native pointer address (Integer >= #{MIN_PLAUSIBLE_POINTER}), got #{object_addr.inspect}"
       end
 
-      vtable_addr = Fiddle::Pointer.new(object_addr)[0, PTR_SIZE].unpack1(PTR_SIZE == 8 ? 'Q' : 'L')
+      Fiddle::Pointer.new(object_addr)[0, PTR_SIZE].unpack1(PTR_SIZE == 8 ? 'Q' : 'L')
+    end
+
+    def vtable_function(object_addr, index, arg_types, ret_type)
+      vtable_addr = vtable_address(object_addr)
       func_addr = Fiddle::Pointer.new(vtable_addr)[index * PTR_SIZE, PTR_SIZE].unpack1(PTR_SIZE == 8 ? 'Q' : 'L')
       Fiddle::Function.new(func_addr, arg_types, ret_type, STDCALL)
     end
@@ -265,6 +288,18 @@ class WIN32OLE
 
       len_bytes = Fiddle::Pointer.new(addr - 4)[0, 4].unpack1('L')
       Fiddle::Pointer.new(addr)[0, len_bytes].dup.force_encoding('UTF-16LE').encode('UTF-8')
+    end
+
+    # For plain NUL-terminated wide strings (LPOLESTR/LPWSTR), unlike BSTR,
+    # which has no length prefix -- e.g. ProgIDFromCLSID's CoTaskMemAlloc'd
+    # output. Scans for the terminating UTF-16 NUL code unit.
+    def wstr_to_s(addr)
+      return nil if addr.nil? || addr.zero?
+
+      ptr = Fiddle::Pointer.new(addr)
+      len = 0
+      len += 1 while ptr[len * 2, 2].unpack1('S') != 0
+      ptr[0, len * 2].dup.force_encoding('UTF-16LE').encode('UTF-8')
     end
 
     def hresult_system_message(hr)

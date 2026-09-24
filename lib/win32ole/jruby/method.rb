@@ -38,7 +38,12 @@ class WIN32OLE
       # the address of a contiguous array of cParams ELEMDESC structs, not
       # an offset into FUNCDESC itself.
       elemdesc_array_ptr = funcdesc.lprgelemdescParam
-      @params = Array.new(funcdesc.cParams) do |i|
+      # MRI builds one Param per name GetNames actually returned beyond the
+      # member's own name (param_names.length), not per FUNCDESC.cParams —
+      # for a property-put method, GetNames returns only the property name
+      # (cParams=1 but zero param names), so cParams would otherwise build a
+      # spurious nameless Param.
+      @params = Array.new(param_names.length) do |i|
         elemdesc_ptr = elemdesc_array_ptr + i * TI::ELEMDESC.size
         WIN32OLE::Param.new(elemdesc_ptr, param_names[i])
       end
@@ -51,9 +56,7 @@ class WIN32OLE
     end
 
     def return_type
-      W.variant_ruby_type(@return_vt).to_s.upcase
-    rescue NotImplementedError
-      "VT_#{@return_vt}"
+      TI.vartype_name(@return_vt)
     end
 
     def return_vtype
@@ -138,7 +141,7 @@ class WIN32OLE
 
     def get_names_fn(itypeinfo_ptr)
       @@get_names_fns ||= {}
-      @@get_names_fns[itypeinfo_ptr] ||= W.vtable_function(
+      @@get_names_fns[W.vtable_address(itypeinfo_ptr)] ||= W.vtable_function(
         itypeinfo_ptr, TI::ITYPEINFO_VTBL[:GetNames],
         [W::VOIDP, W::LONG, W::VOIDP, W::DWORD, W::VOIDP], W::LONG
       )

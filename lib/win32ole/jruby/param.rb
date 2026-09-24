@@ -19,7 +19,12 @@ class WIN32OLE
       elemdesc = TI::ELEMDESC.new(elemdesc_ptr)
       @vt = elemdesc.tdesc_vt
       @param_flags = elemdesc.wParamFlags
-      @paramdescex_ptr = elemdesc.paramdescex_ptr
+      # Read the default value now, not lazily: PARAMDESCEX lives inside the
+      # owning Method's FUNCDESC, which the Method releases (ReleaseFuncDesc)
+      # right after all of its Params are constructed. Holding the raw
+      # pointer past this point and dereferencing it later (e.g. from a
+      # public #default call) would be a use-after-free.
+      @default = read_default(elemdesc.paramdescex_ptr)
     end
 
     def name
@@ -27,9 +32,7 @@ class WIN32OLE
     end
 
     def ole_type
-      W.variant_ruby_type(@vt).to_s.upcase
-    rescue NotImplementedError
-      "VT_#{@vt}"
+      TI.vartype_name(@vt)
     end
 
     def ole_type_detail
@@ -53,12 +56,22 @@ class WIN32OLE
     end
 
     def default
+      @default
+    end
+
+    def inspect
+      "#<WIN32OLE::Param:#{name}=#{ole_type}>"
+    end
+
+    private
+
+    def read_default(paramdescex_ptr)
       return nil unless (@param_flags & PARAMFLAG_FHASDEFAULT) != 0
-      return nil if @paramdescex_ptr.to_i.zero?
+      return nil if paramdescex_ptr.to_i.zero?
 
       # PARAMDESCEX is { ULONG cBytes; VARIANTARG varDefaultValue; } — the
       # VARIANTARG starts 4 bytes into the struct, right after cBytes.
-      variant_bytes = Fiddle::Pointer.new(@paramdescex_ptr)[4, W::VARIANT_SIZE]
+      variant_bytes = Fiddle::Pointer.new(paramdescex_ptr)[4, W::VARIANT_SIZE]
       vt, payload = W.unpack_variant(variant_bytes)
       case W.variant_ruby_type(vt)
       when :i4 then W.unpack_i4(payload)
@@ -70,10 +83,6 @@ class WIN32OLE
       end
     rescue NotImplementedError
       nil
-    end
-
-    def inspect
-      "#<WIN32OLE::Param:#{name}=#{ole_type}>"
     end
   end
 end
