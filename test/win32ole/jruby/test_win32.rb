@@ -1,5 +1,7 @@
 # test/win32ole/jruby/test_win32.rb
 require 'test/unit'
+
+if RUBY_ENGINE == 'jruby'
 require 'win32ole/jruby/win32'
 
 class TestWin32 < Test::Unit::TestCase
@@ -169,4 +171,5 @@ class TestWin32 < Test::Unit::TestCase
     object_ptr = Fiddle::Pointer.to_ptr(object_buf)
     assert_equal(fake_vtable_addr, W.vtable_address(object_ptr.to_i))
   end
+end
 end
