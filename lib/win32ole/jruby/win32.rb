@@ -242,7 +242,19 @@ class WIN32OLE
       Fiddle::Pointer.to_ptr(buffer)
     end
 
+    # Real COM pointers are always heap addresses far above this floor (the
+    # low 64KB of a Windows process's address space is permanently reserved
+    # and never backed by a valid allocation). Rejecting anything below it
+    # here, before the first native dereference, turns what would otherwise
+    # be an unrescuable native access violation (a JVM/process crash) on a
+    # bogus caller-supplied "pointer" into a clean Ruby TypeError.
+    MIN_PLAUSIBLE_POINTER = 0x10000
+
     def vtable_function(object_addr, index, arg_types, ret_type)
+      unless object_addr.is_a?(Integer) && object_addr >= MIN_PLAUSIBLE_POINTER
+        raise TypeError, "expected a native pointer address (Integer >= #{MIN_PLAUSIBLE_POINTER}), got #{object_addr.inspect}"
+      end
+
       vtable_addr = Fiddle::Pointer.new(object_addr)[0, PTR_SIZE].unpack1(PTR_SIZE == 8 ? 'Q' : 'L')
       func_addr = Fiddle::Pointer.new(vtable_addr)[index * PTR_SIZE, PTR_SIZE].unpack1(PTR_SIZE == 8 ? 'Q' : 'L')
       Fiddle::Function.new(func_addr, arg_types, ret_type, STDCALL)
