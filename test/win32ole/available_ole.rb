@@ -10,7 +10,7 @@ if defined?(WIN32OLE)
     def sysmon_available?
       WIN32OLE::Type.new('System Monitor Control', 'SystemMonitor')
       true
-    rescue
+    rescue StandardError, NotImplementedError
       false
     end
 
