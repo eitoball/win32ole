@@ -23,6 +23,8 @@ if defined?(WIN32OLE)
 
     def msxml_available?
       !WIN32OLE::TypeLib.typelibs.find { |t| t.name.start_with?('Microsoft XML') }.nil?
+    rescue
+      false
     end
 
     def event_param
