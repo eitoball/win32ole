@@ -15,8 +15,29 @@ class WIN32OLE
     TKIND_ALIAS = 6
     VT_USERDEFINED = 29
 
+    # Only ever constructed by wrapping an already-obtained ITypeInfo*
+    # pointer, never via a public name-based lookup (spec §3, §4.3).
+    # Win32.vtable_function's pointer-plausibility guard rejects obviously
+    # bogus small integers, but any plausible-looking (>= 0x10000) garbage
+    # address still crashes on dereference -- the real fix is not letting
+    # a public constructor accept a raw address at all. #new itself always
+    # raises; .from_typeinfo_ptr is the one real (internal-only)
+    # construction path.
+    def self.new(*)
+      raise NotImplementedError, 'name-based construction is not implemented yet (Phase 2 non-goal)'
+    end
+
+    def self.from_typeinfo_ptr(itypeinfo_ptr)
+      allocate.tap { |type| type.send(:initialize, itypeinfo_ptr) }
+    end
+
     def initialize(itypeinfo_ptr)
       @ptr = itypeinfo_ptr
+      # Install the finalizer before any call that could raise: the caller
+      # has already AddRef'd this pointer, so if GetTypeAttr/read_documentation
+      # (or the vtable lookups they perform) raise, this Release must still
+      # happen -- otherwise the reference leaks permanently.
+      install_finalizer
 
       attr_out = ("\x00" * W::PTR_SIZE).b
       hr = TI.type_attr_fn(@ptr).call(@ptr, attr_out)
@@ -43,8 +64,6 @@ class WIN32OLE
       TI.release_type_attr_fn(@ptr).call(@ptr, attr_ptr)
 
       @name, @helpstring, @help_context, @helpfile = read_documentation(@ptr, -1)
-
-      install_finalizer
     end
 
     def name
@@ -100,7 +119,7 @@ class WIN32OLE
       hr = TI.ref_type_info_fn(@ptr).call(@ptr, @alias_union_ptr, ref_out)
       return nil if W.failed?(hr)
 
-      Type.new(ref_out.unpack1(W::PACK_PTR)).name
+      Type.from_typeinfo_ptr(ref_out.unpack1(W::PACK_PTR)).name
     end
 
     def variables
@@ -120,7 +139,7 @@ class WIN32OLE
       if W.failed?(hr)
         raise WIN32OLE::QueryInterfaceError, W.query_interface_error_message('GetContainingTypeLib', W.hr_hex(hr))
       end
-      WIN32OLE::TypeLib.new(tlib_out.unpack1(W::PACK_PTR))
+      WIN32OLE::TypeLib.from_itypelib_ptr(tlib_out.unpack1(W::PACK_PTR))
     end
 
     def inspect

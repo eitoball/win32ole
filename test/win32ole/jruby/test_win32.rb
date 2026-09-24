@@ -145,4 +145,28 @@ class TestWin32 < Test::Unit::TestCase
     assert_equal(0x1234, info[:bstr_description_ptr])
     assert_equal(-2147024809, info[:scode])
   end
+
+  def test_vtable_function_rejects_small_integer_addresses
+    # A real crash was found via CI: passing a small-but-valid Integer (not
+    # a real pointer) through to the first native dereference caused a JVM
+    # EXCEPTION_ACCESS_VIOLATION rather than a catchable Ruby exception.
+    err = assert_raise(TypeError) { W.vtable_function(100, 2, [], Fiddle::TYPE_VOID) }
+    assert_match(/100/, err.message)
+  end
+
+  def test_vtable_function_rejects_non_integer_addresses
+    assert_raise(TypeError) { W.vtable_function('not a pointer', 2, [], Fiddle::TYPE_VOID) }
+    assert_raise(TypeError) { W.vtable_function(nil, 2, [], Fiddle::TYPE_VOID) }
+  end
+
+  def test_vtable_address_shares_the_same_guard
+    assert_raise(TypeError) { W.vtable_address(1) }
+  end
+
+  def test_vtable_address_reads_the_first_pointer_sized_field
+    fake_vtable_addr = 0x123456
+    object_buf = [fake_vtable_addr].pack(W::PACK_PTR)
+    object_ptr = Fiddle::Pointer.to_ptr(object_buf)
+    assert_equal(fake_vtable_addr, W.vtable_address(object_ptr.to_i))
+  end
 end

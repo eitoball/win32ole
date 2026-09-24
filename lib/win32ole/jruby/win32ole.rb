@@ -140,7 +140,7 @@ class WIN32OLE
     type_info_ptr = get_type_info_ptr
     raise WIN32OLE::QueryInterfaceError, 'failed to GetTypeInfo' if type_info_ptr.nil?
 
-    Type.new(type_info_ptr)
+    Type.from_typeinfo_ptr(type_info_ptr)
   end
 
   def ole_typelib
