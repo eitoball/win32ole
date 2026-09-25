@@ -120,6 +120,8 @@ class WIN32OLE
     end
 
     def self.array(dims, vt)
+      raise TypeError, "wrong argument type #{dims.class} (expected Array)" unless dims.is_a?(::Array)
+
       bounds = dims.flat_map { |n| [n, 0] }.pack('L2' * dims.size)
       psa = SA.safe_array_create.call(vt & VT::VT_TYPEMASK, dims.size, bounds)
       raise ::RuntimeError, 'memory allocation error' if psa.nil? || psa.to_i.zero?
@@ -129,17 +131,24 @@ class WIN32OLE
 
     def [](*indices)
       base_vt, psa = array_state
-      index_buf = indices.pack('l' * indices.size)
-      elem_ptr_out = ("\x00" * W::PTR_SIZE).b
-      hr = SA.safe_array_ptr_of_index.call(psa, index_buf, elem_ptr_out)
-      raise WIN32OLE::RuntimeError, "failed to SafeArrayPtrOfIndex: #{W.hr_hex(hr)}" if W.failed?(hr)
+      hr = SA.safe_array_lock.call(psa)
+      raise WIN32OLE::RuntimeError, "failed to SafeArrayLock: #{W.hr_hex(hr)}" if W.failed?(hr)
 
-      elem_addr = elem_ptr_out.unpack1(W::PACK_PTR)
-      if base_vt == VT::VT_VARIANT
-        WIN32OLE.variant_bytes_to_ruby_value(Fiddle::Pointer.new(elem_addr)[0, W::VARIANT_SIZE])
-      else
-        fmt = SA::ELEMENT_PACK_FORMAT.fetch(base_vt) { raise NotImplementedError, "VARTYPE #{base_vt} is not a supported array element type yet" }
-        SA.unpack_scalar_element(base_vt, Fiddle::Pointer.new(elem_addr)[0, [1].pack(fmt).bytesize])
+      begin
+        index_buf = indices.pack('l' * indices.size)
+        elem_ptr_out = ("\x00" * W::PTR_SIZE).b
+        hr = SA.safe_array_ptr_of_index.call(psa, index_buf, elem_ptr_out)
+        raise WIN32OLE::RuntimeError, "failed to SafeArrayPtrOfIndex: #{W.hr_hex(hr)}" if W.failed?(hr)
+
+        elem_addr = elem_ptr_out.unpack1(W::PACK_PTR)
+        if base_vt == VT::VT_VARIANT
+          WIN32OLE.variant_bytes_to_ruby_value(Fiddle::Pointer.new(elem_addr)[0, W::VARIANT_SIZE])
+        else
+          fmt = SA::ELEMENT_PACK_FORMAT.fetch(base_vt) { raise NotImplementedError, "VARTYPE #{base_vt} is not a supported array element type yet" }
+          SA.unpack_scalar_element(base_vt, Fiddle::Pointer.new(elem_addr)[0, [1].pack(fmt).bytesize])
+        end
+      ensure
+        SA.safe_array_unlock.call(psa)
       end
     end
 
@@ -147,13 +156,20 @@ class WIN32OLE
       val = args.pop
       indices = args
       base_vt, psa = array_state
-      leaf = base_vt == VT::VT_VARIANT ? WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free ||= [])
-                                        : SA.pack_scalar_element(base_vt, val)
-      index_buf = indices.pack('l' * indices.size)
-      hr = SA.safe_array_put_element.call(psa, index_buf, W.native_pointer_for(leaf))
-      raise WIN32OLE::RuntimeError, "failed to SafeArrayPutElement: #{W.hr_hex(hr)}" if W.failed?(hr)
+      hr = SA.safe_array_lock.call(psa)
+      raise WIN32OLE::RuntimeError, "failed to SafeArrayLock: #{W.hr_hex(hr)}" if W.failed?(hr)
 
-      val
+      begin
+        leaf = base_vt == VT::VT_VARIANT ? WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free ||= [])
+                                          : SA.pack_scalar_element(base_vt, val)
+        index_buf = indices.pack('l' * indices.size)
+        hr = SA.safe_array_put_element.call(psa, index_buf, W.native_pointer_for(leaf))
+        raise WIN32OLE::RuntimeError, "failed to SafeArrayPutElement: #{W.hr_hex(hr)}" if W.failed?(hr)
+
+        val
+      ensure
+        SA.safe_array_unlock.call(psa)
+      end
     end
 
     private
@@ -229,6 +245,7 @@ class WIN32OLE
     end
 
     def set_array_var(psa, vt)
+      vt |= VT::VT_ARRAY
       @var = @realvar = W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
     end
 
