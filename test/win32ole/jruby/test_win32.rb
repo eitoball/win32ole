@@ -231,18 +231,35 @@ class TestWin32 < Test::Unit::TestCase
   end
 
   def test_pack_byref_scalar_points_into_the_body_offset_of_realvar
-    realvar = W.pack_variant(W::VT_I4, W.pack_i4(42))
-    byref = W.pack_byref(W::VT_I4, realvar)
+    realvar_bytes = W.pack_variant(W::VT_I4, W.pack_i4(42))
+    realvar_ptr = W.persistent_pointer_for(realvar_bytes)
+    byref = W.pack_byref(W::VT_I4, realvar_ptr)
     vt, payload = W.unpack_variant(byref)
     assert_equal(W::VT_I4 | W::VT_BYREF, vt)
-    assert_equal(W.native_pointer_for(realvar).to_i + 8, W.unpack_pointer(payload))
+    ptr_value = W.unpack_pointer(payload)
+    assert_equal(realvar_ptr.to_i + 8, ptr_value)
   end
 
   def test_pack_byref_variant_points_at_the_whole_realvar_buffer
-    realvar = W.pack_variant(W::VT_I4, W.pack_i4(42))
-    byref = W.pack_byref(W::VT_VARIANT, realvar)
+    realvar_bytes = W.pack_variant(W::VT_I4, W.pack_i4(42))
+    realvar_ptr = W.persistent_pointer_for(realvar_bytes)
+    byref = W.pack_byref(W::VT_VARIANT, realvar_ptr)
     _vt, payload = W.unpack_variant(byref)
-    assert_equal(W.native_pointer_for(realvar).to_i, W.unpack_pointer(payload))
+    ptr_value = W.unpack_pointer(payload)
+    assert_equal(realvar_ptr.to_i, ptr_value)
+  end
+
+  def test_persistent_pointer_for_copies_the_given_bytes
+    bytes = W.pack_i4(42)
+    ptr = W.persistent_pointer_for(bytes)
+    assert_equal(bytes, ptr[0, bytes.bytesize])
+  end
+
+  def test_persistent_pointer_for_write_back_is_visible_through_the_same_pointer_object
+    bytes = W.pack_i4(42)
+    ptr = W.persistent_pointer_for(bytes)
+    Fiddle::Pointer.new(ptr.to_i)[0, 4] = [99].pack('l')
+    assert_equal(99, W.unpack_i4(ptr[0, 4]))
   end
 end
 end
