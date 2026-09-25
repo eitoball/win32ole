@@ -24,4 +24,20 @@ class TestVariantType < Test::Unit::TestCase
     assert_same(WIN32OLE::VariantType, WIN32OLE::VARIANT)
   end
 end
+
+class TestVariantByRefRoundTrip < Test::Unit::TestCase
+  def test_mutating_realvar_bytes_is_visible_through_the_byref_pointer
+    v = WIN32OLE::Variant.new(42, WIN32OLE::VariantType::VT_I4 | WIN32OLE::VariantType::VT_BYREF)
+    realvar = v.instance_variable_get(:@realvar)
+    var = v.instance_variable_get(:@var)
+
+    _vt, payload = WIN32OLE::Win32.unpack_variant(var)
+    ptr_into_realvar = WIN32OLE::Win32.unpack_pointer(payload)
+    assert_equal(WIN32OLE::Win32.native_pointer_for(realvar).to_i + 8, ptr_into_realvar)
+
+    # Simulate an out-parameter callee overwriting *ptr_into_realvar in place
+    Fiddle::Pointer.new(ptr_into_realvar)[0, 4] = [99].pack('l')
+    assert_equal(99, WIN32OLE::Win32.unpack_i4(realvar[8, 4]))
+  end
+end
 end
