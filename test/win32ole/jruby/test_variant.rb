@@ -49,7 +49,9 @@ class TestVariantArrayIndexValidation < Test::Unit::TestCase
   def setup
     @original_dim_fn = WIN32OLE::SafeArray.instance_variable_get(:@safe_array_get_dim)
     fake = Object.new
-    def fake.call(_psa) = 2
+    def fake.call(_psa)
+      2
+    end
     WIN32OLE::SafeArray.instance_variable_set(:@safe_array_get_dim, fake)
   end
 
