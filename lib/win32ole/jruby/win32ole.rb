@@ -2,6 +2,9 @@
 require 'fiddle'
 require 'win32ole/jruby/win32'
 require 'win32ole/jruby/dispatch'
+require 'win32ole/jruby/array'
+require 'win32ole/jruby/record'
+require 'win32ole/jruby/variant'
 
 class WIN32OLE
   RuntimeError = Class.new(::RuntimeError)
@@ -27,6 +30,16 @@ class WIN32OLE
     end
 
     def ruby_value_to_variant_bytes(value, bstrs_to_free)
+      case value
+      when ::Array
+        psa = SafeArray.ruby_array_to_safearray(value, W::VT_VARIANT, bstrs_to_free)
+        return W.pack_variant(W::VT_VARIANT | W::VT_ARRAY, W.pack_pointer(psa.to_i))
+      when WIN32OLE::Record
+        return value.to_variant_bytes
+      when WIN32OLE::Variant
+        return value.instance_variable_get(:@var)
+      end
+
       type = W.ruby_to_variant_type(value)
       payload =
         case type
@@ -46,8 +59,23 @@ class WIN32OLE
     end
 
     def variant_bytes_to_ruby_value(bytes)
-      vt, payload = W.unpack_variant(bytes)
+      vt, = W.unpack_variant(bytes)
+      base_vt = vt & W::VT_TYPEMASK
+
+      if (vt & W::VT_ARRAY) != 0
+        _vt, payload = W.unpack_variant(bytes)
+        psa = W.unpack_pointer(payload)
+        return SafeArray.safearray_to_ruby_array(psa, base_vt)
+      end
+
+      if base_vt == W::VT_RECORD
+        _vt, body = W.unpack_variant(bytes, body_size: WIN32OLE::Record::VT_RECORD_BODY_SIZE)
+        buffer_ptr, pri = body.unpack("#{W::PACK_PTR}2")
+        return WIN32OLE::Record.from_irecordinfo_and_buffer(pri, buffer_ptr)
+      end
+
       type = W.variant_ruby_type(vt)
+      _vt2, payload = W.unpack_variant(bytes)
       case type
       when :empty then nil
       when :i4 then W.unpack_i4(payload)
