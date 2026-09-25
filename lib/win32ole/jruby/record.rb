@@ -90,6 +90,41 @@ class WIN32OLE
       "#<WIN32OLE::Record:#{@typename}>"
     end
 
+    def method_missing(name, *args)
+      sname = name.to_s
+      case args.size
+      when 0 then @fields.fetch(sname)
+      when 1
+        key = sname.end_with?('=') ? sname[0..-2] : sname
+        @fields.fetch(key) # raises KeyError before writing, matching MRI
+        @fields[key] = args.first
+      else
+        super
+      end
+    end
+
+    def respond_to_missing?(name, include_private = false)
+      @fields.key?(name.to_s.sub(/=\z/, '')) || super
+    end
+
+    def ole_instance_variable_get(name)
+      unless name.is_a?(String) || name.is_a?(Symbol)
+        raise TypeError, 'wrong argument type (expected String or Symbol)'
+      end
+
+      @fields.fetch(name.to_s)
+    end
+
+    def ole_instance_variable_set(name, val)
+      unless name.is_a?(String) || name.is_a?(Symbol)
+        raise TypeError, 'wrong argument type (expected String or Symbol)'
+      end
+
+      key = name.to_s
+      @fields.fetch(key)
+      @fields[key] = val
+    end
+
     private
 
     def resolve_itypelib_ptr(oleobj)
