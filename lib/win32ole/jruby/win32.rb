@@ -19,13 +19,29 @@ class WIN32OLE
     VARIANT_SIZE = PTR_SIZE == 8 ? 24 : 16
 
     VT_EMPTY    = 0
+    VT_NULL     = 1
+    VT_I2       = 2
     VT_I4       = 3
+    VT_R4       = 4
     VT_R8       = 5
     VT_BSTR     = 8
     VT_DISPATCH = 9
+    VT_ERROR    = 10
     VT_BOOL     = 11
+    VT_VARIANT  = 12
     VT_UNKNOWN  = 13
+    VT_I1       = 16
+    VT_UI1      = 17
+    VT_UI2      = 18
+    VT_UI4      = 19
     VT_I8       = 20
+    VT_UI8      = 21
+    VT_INT      = 22
+    VT_UINT     = 23
+    VT_RECORD   = 36
+    VT_TYPEMASK = 0x0FFF
+    VT_ARRAY    = 0x2000
+    VT_BYREF    = 0x4000
 
     DISPATCH_METHOD      = 1
     DISPATCH_PROPERTYGET = 2
@@ -70,32 +86,53 @@ class WIN32OLE
       "#{str}\x00".encode('UTF-16LE').b
     end
 
-    def pack_variant(vt, payload)
-      payload = payload.b
-      unless payload.bytesize == 8
-        raise ArgumentError, "payload must be 8 bytes, got #{payload.bytesize}"
+    def pack_variant(vt, body)
+      body = body.b
+      max = VARIANT_SIZE - 8
+      if body.bytesize > max
+        raise ArgumentError, "body must be <= #{max} bytes, got #{body.bytesize}"
       end
 
-      [vt, 0, 0, 0].pack('S4') + payload + ("\x00".b * (VARIANT_SIZE - 16))
+      [vt, 0, 0, 0].pack('S4') + body + ("\x00".b * (max - body.bytesize))
     end
 
-    def unpack_variant(bytes)
+    def unpack_variant(bytes, body_size: 8)
       vt, = bytes.unpack1('S')
-      [vt, bytes[8, 8]]
+      [vt, bytes[8, body_size]]
     end
 
+    def pack_i1(value)    = [value].pack('c') + ("\x00".b * 7)
+    def pack_ui1(value)   = [value].pack('C') + ("\x00".b * 7)
+    def pack_i2(value)    = [value].pack('s') + ("\x00".b * 6)
+    def pack_ui2(value)   = [value].pack('S') + ("\x00".b * 6)
     def pack_i4(value)    = [value].pack('l') + ("\x00".b * 4)
+    def pack_ui4(value)   = [value].pack('L') + ("\x00".b * 4)
     def pack_i8(value)    = [value].pack('q')
+    def pack_ui8(value)   = [value].pack('Q')
+    def pack_int(value)   = pack_i4(value)
+    def pack_uint(value)  = pack_ui4(value)
+    def pack_r4(value)    = [value].pack('f') + ("\x00".b * 4)
     def pack_r8(value)    = [value].pack('d')
     def pack_bool(value)  = [value ? -1 : 0].pack('s') + ("\x00".b * 6)
     def pack_pointer(addr) = [addr].pack('Q')
     def pack_empty        = "\x00".b * 8
+    def pack_error(value) = pack_i4(value)
 
+    def unpack_i1(payload)    = payload.unpack1('c')
+    def unpack_ui1(payload)   = payload.unpack1('C')
+    def unpack_i2(payload)    = payload.unpack1('s')
+    def unpack_ui2(payload)   = payload.unpack1('S')
     def unpack_i4(payload)    = payload.unpack1('l')
+    def unpack_ui4(payload)   = payload.unpack1('L')
     def unpack_i8(payload)    = payload.unpack1('q')
+    def unpack_ui8(payload)   = payload.unpack1('Q')
+    def unpack_int(payload)   = unpack_i4(payload)
+    def unpack_uint(payload)  = unpack_ui4(payload)
+    def unpack_r4(payload)    = payload.unpack1('f')
     def unpack_r8(payload)    = payload.unpack1('d')
     def unpack_bool(payload)  = payload.unpack1('s') != 0
     def unpack_pointer(payload) = payload.unpack1('Q')
+    def unpack_error(payload) = unpack_i4(payload)
 
     def ruby_to_variant_type(value)
       case value

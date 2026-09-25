@@ -31,8 +31,9 @@ class TestWin32 < Test::Unit::TestCase
     assert_equal(42, W.unpack_i4(payload))
   end
 
-  def test_pack_variant_rejects_wrong_size_payload
-    assert_raise(ArgumentError) { W.pack_variant(W::VT_I4, "\x00\x00\x00") }
+  def test_pack_variant_rejects_oversized_payload
+    # After generalization, only reject payloads that exceed VARIANT_SIZE - 8
+    assert_raise(ArgumentError) { W.pack_variant(W::VT_I4, "\x00".b * (W::VARIANT_SIZE - 7)) }
   end
 
   def test_i8_round_trip
@@ -170,6 +171,63 @@ class TestWin32 < Test::Unit::TestCase
     object_buf = [fake_vtable_addr].pack(W::PACK_PTR)
     object_ptr = Fiddle::Pointer.to_ptr(object_buf)
     assert_equal(fake_vtable_addr, W.vtable_address(object_ptr.to_i))
+  end
+
+  def test_pack_variant_accepts_a_variable_length_body
+    bytes = W.pack_variant(W::VT_RECORD, "\x01\x02")
+    assert_equal(W::VARIANT_SIZE, bytes.bytesize)
+  end
+
+  def test_pack_variant_zero_pads_a_short_body
+    bytes = W.pack_variant(W::VT_I4, W.pack_i4(7))
+    assert_equal("\x00".b * (W::VARIANT_SIZE - 12), bytes[12, W::VARIANT_SIZE - 12])
+  end
+
+  def test_pack_variant_rejects_a_body_longer_than_the_slot
+    assert_raise(ArgumentError) { W.pack_variant(W::VT_I4, "\x00".b * (W::VARIANT_SIZE - 7)) }
+  end
+
+  def test_unpack_variant_reads_the_requested_body_size
+    body = [1, 2].pack(W::PACK_PTR * 2)
+    bytes = W.pack_variant(W::VT_RECORD, body)
+    vt, read_body = W.unpack_variant(bytes, body_size: body.bytesize)
+    assert_equal(W::VT_RECORD, vt)
+    assert_equal(body, read_body)
+  end
+
+  def test_unpack_variant_default_body_size_is_unchanged
+    bytes = W.pack_variant(W::VT_I4, W.pack_i4(42))
+    vt, payload = W.unpack_variant(bytes)
+    assert_equal(W::VT_I4, vt)
+    assert_equal(42, W.unpack_i4(payload))
+  end
+
+  def test_scalar_family_round_trips
+    assert_equal(-5, W.unpack_i1(W.pack_i1(-5)))
+    assert_equal(200, W.unpack_ui1(W.pack_ui1(200)))
+    assert_equal(-1000, W.unpack_i2(W.pack_i2(-1000)))
+    assert_equal(40_000, W.unpack_ui2(W.pack_ui2(40_000)))
+    assert_equal(4_000_000_000, W.unpack_ui4(W.pack_ui4(4_000_000_000)))
+    assert_equal(-7, W.unpack_int(W.pack_int(-7)))
+    assert_equal(7, W.unpack_uint(W.pack_uint(7)))
+    assert_equal(18_000_000_000, W.unpack_ui8(W.pack_ui8(18_000_000_000)))
+    assert_in_delta(1.5, W.unpack_r4(W.pack_r4(1.5)), 0.0001)
+    assert_equal(-2_147_024_809, W.unpack_error(W.pack_error(-2_147_024_809)))
+  end
+
+  def test_scalar_family_payloads_are_eight_bytes_zero_padded
+    assert_equal(8, W.pack_i1(1).bytesize)
+    assert_equal(8, W.pack_ui8(1).bytesize) # the one already-8-byte-wide case: no padding needed
+    assert_equal("\x00".b * 7, W.pack_i1(1)[1, 7])
+  end
+
+  def test_new_vt_constants_do_not_collide_with_existing_ones
+    existing = [W::VT_EMPTY, W::VT_I4, W::VT_R8, W::VT_BSTR, W::VT_DISPATCH, W::VT_BOOL, W::VT_UNKNOWN, W::VT_I8]
+    new_scalars = [W::VT_NULL, W::VT_I2, W::VT_R4, W::VT_ERROR, W::VT_VARIANT,
+                   W::VT_I1, W::VT_UI1, W::VT_UI2, W::VT_UI4, W::VT_UI8, W::VT_INT, W::VT_UINT, W::VT_RECORD]
+    assert_empty(existing & new_scalars)
+    assert_equal(0x2000, W::VT_ARRAY)
+    assert_equal(0x4000, W::VT_BYREF)
   end
 end
 end
