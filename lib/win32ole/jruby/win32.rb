@@ -366,5 +366,24 @@ class WIN32OLE
     def local_free
       @local_free ||= Fiddle::Function.new(kernel32['LocalFree'], [VOIDP], VOIDP, STDCALL)
     end
+
+    # var's body holds a pointer INTO realvar's own already-packed bytes --
+    # realvar must outlive var (Phase 1 §4.5's "native address embedded as
+    # data" keep-alive discipline: the caller, WIN32OLE::Variant, is what
+    # keeps realvar's String reachable for as long as var is in use).
+    # VT_VARIANT|VT_BYREF is the one exception (mirrors MRI's
+    # ole_set_byref): the pointer targets realvar's own start (offset 0,
+    # the whole VARIANT), not offset 8 (one scalar slot within it).
+    def pack_byref(vt, realvar_bytes)
+      offset = vt == VT_VARIANT ? 0 : 8
+      ptr = native_pointer_for(realvar_bytes)
+      pack_variant(vt | VT_BYREF, pack_pointer((ptr + offset).to_i))
+    end
+
+    def variant_change_type
+      @variant_change_type ||= Fiddle::Function.new(
+        oleaut32['VariantChangeTypeEx'], [VOIDP, VOIDP, DWORD, WORD, WORD], LONG, STDCALL
+      )
+    end
   end
 end
