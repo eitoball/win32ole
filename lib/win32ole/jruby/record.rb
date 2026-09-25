@@ -2,8 +2,6 @@
 require 'fiddle'
 require 'win32ole/jruby/win32'
 require 'win32ole/jruby/typeinfo'
-require 'win32ole/jruby/win32ole'
-require 'win32ole/jruby/typelib'
 
 class WIN32OLE
   class Record
