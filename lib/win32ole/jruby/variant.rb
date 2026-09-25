@@ -89,6 +89,7 @@ class WIN32OLE
 
       @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
       @var = byref ? W.pack_byref(vartype & ~VT::VT_BYREF, @realvar) : @realvar
+      commit_realvar(@realvar) if byref
     end
 
     def value
@@ -116,6 +117,7 @@ class WIN32OLE
         end
       @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
       @var = byref ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
+      commit_realvar(@realvar) if byref
     end
 
     def vartype
@@ -254,26 +256,32 @@ class WIN32OLE
       byref = (vt & VT::VT_BYREF) != 0
       @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
       @var = byref ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
+      commit_realvar(@realvar) if byref
     end
 
-    # Converts realvar_bytes into a persistent, malloc'd Fiddle::Pointer
-    # for use as a VT_BYREF target -- see persistent_pointer_for's own
-    # comment for why a plain Ruby String won't work here on JRuby.
-    # Installs exactly ONE GC finalizer per instance (idempotent via
-    # @realvar_finalizer_state, a mutable Hash the finalizer closure reads
-    # from at GC time, not a value frozen when the closure was created --
-    # ObjectSpace.define_finalizer is additive, so re-registering on every
-    # call would run multiple finalizers and double-free/leak, the same
-    # footgun WIN32OLE::Record's finalizer (lib/win32ole/jruby/record.rb,
-    # already fixed) had to avoid).
+    # Allocates a persistent buffer for bytes and returns it -- does NOT
+    # touch @realvar_finalizer_state yet. Call commit_realvar with the
+    # result once @var/@realvar have been rebuilt to reference it, so the
+    # old buffer (if any) is only freed after nothing references it
+    # anymore -- freeing it first (the naive order) leaves a window where
+    # @var's own embedded bytes point at already-freed memory, and if
+    # allocation itself raises, freeing the old buffer up front would
+    # leave the finalizer holding an already-freed pointer (double-free
+    # at GC time).
     def persist_realvar(bytes)
       @realvar_finalizer_state ||= {}.tap do |state|
         ObjectSpace.define_finalizer(self, self.class.realvar_finalizer(state))
       end
-      Fiddle.free(@realvar_finalizer_state[:ptr]) if @realvar_finalizer_state[:ptr]
-      ptr = W.persistent_pointer_for(bytes)
+      W.persistent_pointer_for(bytes)
+    end
+
+    # Stores ptr as the current realvar buffer and frees whatever was
+    # there before -- call this only after @var/@realvar already
+    # reference ptr, not before.
+    def commit_realvar(ptr)
+      old_ptr = @realvar_finalizer_state[:ptr]
       @realvar_finalizer_state[:ptr] = ptr
-      ptr
+      Fiddle.free(old_ptr) if old_ptr
     end
 
     def self.realvar_finalizer(state)
