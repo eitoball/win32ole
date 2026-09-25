@@ -58,5 +58,10 @@ class TestSafeArray < Test::Unit::TestCase
     tuples = SA.each_read_index([1, 1], [2, 2]).to_a
     assert_equal([[1, 1], [2, 1], [1, 2], [2, 2]], tuples)
   end
+
+  def test_ruby_array_to_safearray_raises_type_error_for_non_array
+    err = assert_raise(TypeError) { SA.ruby_array_to_safearray('not an array', WIN32OLE::Win32::VT_I4) }
+    assert_match(/String/, err.message)
+  end
 end
 end

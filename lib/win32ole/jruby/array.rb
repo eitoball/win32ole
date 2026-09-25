@@ -186,6 +186,7 @@ class WIN32OLE
     def ruby_array_to_safearray(ary, elem_vt, bstrs_to_free = [])
       base_vt = elem_vt & W::VT_TYPEMASK
       return ui1_safearray_from_bytes(ary) if base_vt == W::VT_UI1 && ary.is_a?(::String)
+      raise TypeError, "wrong argument type #{ary.class} (expected Array)" unless ary.is_a?(::Array)
 
       sizes = dimension_sizes(ary)
       dims = sizes.size
@@ -213,7 +214,6 @@ class WIN32OLE
 
     def safearray_to_ruby_array(psa, elem_vt)
       base_vt = elem_vt & W::VT_TYPEMASK
-      return ui1_safearray_to_bytes(psa) if base_vt == W::VT_UI1
 
       dim = safe_array_get_dim.call(psa)
       lbounds = Array.new(dim) { |d| out = ("\x00" * 4).b; safe_array_get_lbound.call(psa, d + 1, out); out.unpack1('l') }
