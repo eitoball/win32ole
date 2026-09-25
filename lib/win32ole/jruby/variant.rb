@@ -246,12 +246,15 @@ class WIN32OLE
 
     def set_array_var(psa, vt)
       vt |= VT::VT_ARRAY
-      @var = @realvar = W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
+      @realvar = W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
+      @var = (vt & VT::VT_BYREF) != 0 ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
     end
 
     def array_state
       vt, payload = W.unpack_variant(@var)
-      [vt & VT::VT_TYPEMASK, W.unpack_pointer(payload)]
+      addr = W.unpack_pointer(payload)
+      addr = Fiddle::Pointer.new(addr)[0, W::PTR_SIZE].unpack1(W::PACK_PTR) if (vt & VT::VT_BYREF) != 0
+      [vt & VT::VT_TYPEMASK, addr]
     end
   end
 end
