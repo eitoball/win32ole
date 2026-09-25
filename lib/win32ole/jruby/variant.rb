@@ -77,7 +77,7 @@ class WIN32OLE
       base_vt = vartype & VT::VT_TYPEMASK
       byref = (vartype & VT::VT_BYREF) != 0
 
-      @realvar =
+      realvar_bytes =
         if (vartype & VT::VT_ARRAY) != 0
           @bstrs_to_free = []
           psa = SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free)
@@ -87,6 +87,7 @@ class WIN32OLE
           pack_scalar_explicit(base_vt, val)
         end
 
+      @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
       @var = byref ? W.pack_byref(vartype & ~VT::VT_BYREF, @realvar) : @realvar
     end
 
@@ -101,17 +102,20 @@ class WIN32OLE
     def value=(val)
       vt, = W.unpack_variant(@var)
       base_vt = vt & VT::VT_TYPEMASK
-      if (vt & VT::VT_ARRAY) != 0
-        unless val.is_a?(::String) && base_vt == VT::VT_UI1
-          raise WIN32OLE::RuntimeError, 'array value can only be replaced with a String for a VT_UI1|VT_ARRAY Variant'
-        end
+      byref = (vt & VT::VT_BYREF) != 0
+      realvar_bytes =
+        if (vt & VT::VT_ARRAY) != 0
+          unless val.is_a?(::String) && base_vt == VT::VT_UI1
+            raise WIN32OLE::RuntimeError, 'array value can only be replaced with a String for a VT_UI1|VT_ARRAY Variant'
+          end
 
-        psa = SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free ||= [])
-        @realvar = W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
-      else
-        @realvar = pack_scalar_explicit(base_vt, val)
-      end
-      @var = (vt & VT::VT_BYREF) != 0 ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
+          psa = SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free ||= [])
+          W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
+        else
+          pack_scalar_explicit(base_vt, val)
+        end
+      @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
+      @var = byref ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
     end
 
     def vartype
@@ -246,8 +250,34 @@ class WIN32OLE
 
     def set_array_var(psa, vt)
       vt |= VT::VT_ARRAY
-      @realvar = W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
-      @var = (vt & VT::VT_BYREF) != 0 ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
+      realvar_bytes = W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
+      byref = (vt & VT::VT_BYREF) != 0
+      @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
+      @var = byref ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
+    end
+
+    # Converts realvar_bytes into a persistent, malloc'd Fiddle::Pointer
+    # for use as a VT_BYREF target -- see persistent_pointer_for's own
+    # comment for why a plain Ruby String won't work here on JRuby.
+    # Installs exactly ONE GC finalizer per instance (idempotent via
+    # @realvar_finalizer_state, a mutable Hash the finalizer closure reads
+    # from at GC time, not a value frozen when the closure was created --
+    # ObjectSpace.define_finalizer is additive, so re-registering on every
+    # call would run multiple finalizers and double-free/leak, the same
+    # footgun WIN32OLE::Record's finalizer (lib/win32ole/jruby/record.rb,
+    # already fixed) had to avoid).
+    def persist_realvar(bytes)
+      @realvar_finalizer_state ||= {}.tap do |state|
+        ObjectSpace.define_finalizer(self, self.class.realvar_finalizer(state))
+      end
+      Fiddle.free(@realvar_finalizer_state[:ptr]) if @realvar_finalizer_state[:ptr]
+      ptr = W.persistent_pointer_for(bytes)
+      @realvar_finalizer_state[:ptr] = ptr
+      ptr
+    end
+
+    def self.realvar_finalizer(state)
+      proc { Fiddle.free(state[:ptr]) if state[:ptr] }
     end
 
     def array_state

@@ -290,6 +290,12 @@ class WIN32OLE
       Fiddle::Pointer.to_ptr(buffer)
     end
 
+    def persistent_pointer_for(bytes)
+      ptr = Fiddle::Pointer.malloc(bytes.bytesize)
+      ptr[0, bytes.bytesize] = bytes
+      ptr
+    end
+
     # Real COM pointers are always heap addresses far above this floor (the
     # low 64KB of a Windows process's address space is permanently reserved
     # and never backed by a valid allocation). Rejecting anything below it
@@ -374,10 +380,16 @@ class WIN32OLE
     # VT_VARIANT|VT_BYREF is the one exception (mirrors MRI's
     # ole_set_byref): the pointer targets realvar's own start (offset 0,
     # the whole VARIANT), not offset 8 (one scalar slot within it).
-    def pack_byref(vt, realvar_bytes)
+    #
+    # realvar_ptr must be a persistent Fiddle::Pointer (from
+    # persistent_pointer_for), NOT a plain Ruby String -- on JRuby,
+    # Fiddle::Pointer.to_ptr(a_string) always returns a fresh, disconnected
+    # copy with no write-back, so pointing into a String's own bytes here
+    # would silently break VT_BYREF's whole purpose (a native out-parameter
+    # write becoming visible when Ruby later reads realvar).
+    def pack_byref(vt, realvar_ptr)
       offset = vt == VT_VARIANT ? 0 : 8
-      ptr = native_pointer_for(realvar_bytes)
-      pack_variant(vt | VT_BYREF, pack_pointer((ptr + offset).to_i))
+      pack_variant(vt | VT_BYREF, pack_pointer((realvar_ptr + offset).to_i))
     end
 
     def variant_change_type
