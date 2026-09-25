@@ -156,6 +156,16 @@ class WIN32OLE
       when VT_BOOL then :bool
       when VT_BSTR then :bstr
       when VT_DISPATCH, VT_UNKNOWN then :dispatch
+      when VT_I1 then :i1
+      when VT_UI1 then :ui1
+      when VT_I2 then :i2
+      when VT_UI2 then :ui2
+      when VT_UI4 then :ui4
+      when VT_UI8 then :ui8
+      when VT_INT then :int
+      when VT_UINT then :uint
+      when VT_R4 then :r4
+      when VT_ERROR then :error
       else
         raise NotImplementedError, "VARTYPE #{vt} is not supported yet"
       end

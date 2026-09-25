@@ -89,6 +89,19 @@ class TestWin32 < Test::Unit::TestCase
     assert_match(/99/, err.message)
   end
 
+  def test_variant_ruby_type_covers_all_scalar_vartypes_phase3_added
+    assert_equal(:i1, W.variant_ruby_type(W::VT_I1))
+    assert_equal(:ui1, W.variant_ruby_type(W::VT_UI1))
+    assert_equal(:i2, W.variant_ruby_type(W::VT_I2))
+    assert_equal(:ui2, W.variant_ruby_type(W::VT_UI2))
+    assert_equal(:ui4, W.variant_ruby_type(W::VT_UI4))
+    assert_equal(:ui8, W.variant_ruby_type(W::VT_UI8))
+    assert_equal(:int, W.variant_ruby_type(W::VT_INT))
+    assert_equal(:uint, W.variant_ruby_type(W::VT_UINT))
+    assert_equal(:r4, W.variant_ruby_type(W::VT_R4))
+    assert_equal(:error, W.variant_ruby_type(W::VT_ERROR))
+  end
+
   def test_dispatch_plan_zero_args_uses_method_or_propertyget
     plan = W.dispatch_plan('Count', [])
     assert_equal('Count', plan[:name])

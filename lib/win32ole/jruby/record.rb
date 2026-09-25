@@ -243,6 +243,7 @@ class WIN32OLE
       count_out = ("\x00" * 4).b
       hr = self.class.get_field_names_fn(pri).call(pri, count_out, nil)
       count = count_out.unpack1('L')
+      @fields = {}
       return if W.failed?(hr) || count.zero?
 
       names_out = ("\x00" * (count * W::PTR_SIZE)).b
@@ -250,7 +251,6 @@ class WIN32OLE
       self.class.get_field_names_fn(pri).call(pri, count_out, names_out)
       bstrs = names_out.unpack(W::PACK_PTR * count)
 
-      @fields = {}
       bstrs.each do |bstr|
         name = W.bstr_to_s(bstr)
         val = nil

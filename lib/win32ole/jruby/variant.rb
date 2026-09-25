@@ -95,7 +95,12 @@ class WIN32OLE
     def value
       vt, = W.unpack_variant(@var)
       base_vt = vt & VT::VT_TYPEMASK
-      return SA.safearray_to_ruby_array(current_array_ptr, base_vt) if (vt & VT::VT_ARRAY) != 0
+      if (vt & VT::VT_ARRAY) != 0
+        psa = current_array_ptr
+        return SA.ui1_safearray_to_bytes(psa) if base_vt == VT::VT_UI1 && SA.safe_array_get_dim.call(psa) == 1
+
+        return SA.safearray_to_ruby_array(psa, base_vt)
+      end
 
       WIN32OLE.variant_bytes_to_ruby_value(current_scalar_bytes)
     end
@@ -137,6 +142,9 @@ class WIN32OLE
 
     def [](*indices)
       base_vt, psa = array_state
+      dim = SA.safe_array_get_dim.call(psa)
+      raise ArgumentError, 'unmatch number of indices' unless indices.size == dim
+
       hr = SA.safe_array_lock.call(psa)
       raise WIN32OLE::RuntimeError, "failed to SafeArrayLock: #{W.hr_hex(hr)}" if W.failed?(hr)
 
@@ -162,6 +170,9 @@ class WIN32OLE
       val = args.pop
       indices = args
       base_vt, psa = array_state
+      dim = SA.safe_array_get_dim.call(psa)
+      raise ArgumentError, 'unmatch number of indices' unless indices.size == dim
+
       hr = SA.safe_array_lock.call(psa)
       raise WIN32OLE::RuntimeError, "failed to SafeArrayLock: #{W.hr_hex(hr)}" if W.failed?(hr)
 
