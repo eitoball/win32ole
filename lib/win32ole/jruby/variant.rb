@@ -1,4 +1,5 @@
 require 'win32ole/jruby/win32'
+require 'win32ole/jruby/array'
 
 class WIN32OLE
   module VariantType
@@ -57,4 +58,123 @@ class WIN32OLE
   end
 
   VARIANT = VariantType
+
+  class Variant
+    W = Win32
+    SA = SafeArray
+    VT = VariantType
+    private_constant :W, :SA, :VT
+
+    def initialize(val, vartype = nil, _reserved = nil)
+      if vartype.nil?
+        @var = WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free = [])
+        return
+      end
+
+      raise ArgumentError, 'WIN32OLE::Variant does not support VT_RECORD; use WIN32OLE::Record instead' if (vartype & VT::VT_TYPEMASK) == VT::VT_RECORD
+
+      base_vt = vartype & VT::VT_TYPEMASK
+      byref = (vartype & VT::VT_BYREF) != 0
+
+      @realvar =
+        if (vartype & VT::VT_ARRAY) != 0
+          @bstrs_to_free = []
+          psa = SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free)
+          W.pack_variant(vartype & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
+        else
+          @bstrs_to_free = []
+          pack_scalar_explicit(base_vt, val)
+        end
+
+      @var = byref ? W.pack_byref(vartype & ~VT::VT_BYREF, @realvar) : @realvar
+    end
+
+    def value
+      vt, = W.unpack_variant(@var)
+      base_vt = vt & VT::VT_TYPEMASK
+      return SA.safearray_to_ruby_array(current_array_ptr, base_vt) if (vt & VT::VT_ARRAY) != 0
+
+      WIN32OLE.variant_bytes_to_ruby_value(current_scalar_bytes)
+    end
+
+    def value=(val)
+      vt, = W.unpack_variant(@var)
+      base_vt = vt & VT::VT_TYPEMASK
+      if (vt & VT::VT_ARRAY) != 0
+        unless val.is_a?(::String) && base_vt == VT::VT_UI1
+          raise WIN32OLE::RuntimeError, 'array value can only be replaced with a String for a VT_UI1|VT_ARRAY Variant'
+        end
+
+        psa = SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free ||= [])
+        @realvar = W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
+      else
+        @realvar = pack_scalar_explicit(base_vt, val)
+      end
+      @var = (vt & VT::VT_BYREF) != 0 ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
+    end
+
+    def vartype
+      vt, = W.unpack_variant(@var)
+      vt
+    end
+
+    private
+
+    def current_array_ptr
+      _vt, payload = W.unpack_variant(@var)
+      W.unpack_pointer(payload)
+    end
+
+    def current_scalar_bytes
+      @var
+    end
+
+    SCALAR_PACK = {
+      VT::VT_I1 => :pack_i1, VT::VT_UI1 => :pack_ui1, VT::VT_I2 => :pack_i2, VT::VT_UI2 => :pack_ui2,
+      VT::VT_I4 => :pack_i4, VT::VT_UI4 => :pack_ui4, VT::VT_INT => :pack_int, VT::VT_UINT => :pack_uint,
+      VT::VT_I8 => :pack_i8, VT::VT_UI8 => :pack_ui8, VT::VT_R4 => :pack_r4, VT::VT_R8 => :pack_r8,
+      VT::VT_BOOL => :pack_bool, VT::VT_ERROR => :pack_error, VT::VT_EMPTY => :pack_empty
+    }.freeze
+
+    def pack_scalar_explicit(base_vt, val)
+      if base_vt == VT::VT_EMPTY || base_vt == VT::VT_NULL
+        return W.pack_variant(base_vt, W.pack_empty)
+      end
+      if base_vt == VT::VT_BSTR
+        bstr = W.sys_alloc_string.call(W.wstr(val))
+        (@bstrs_to_free ||= []) << bstr
+        return W.pack_variant(base_vt, W.pack_pointer(bstr))
+      end
+      if base_vt == VT::VT_DISPATCH || base_vt == VT::VT_UNKNOWN
+        ptr = val.nil? ? 0 : val.instance_variable_get(:@ptr)
+        return W.pack_variant(base_vt, W.pack_pointer(ptr))
+      end
+
+      pack_method = SCALAR_PACK[base_vt]
+      unless pack_method
+        raise NotImplementedError, "VARTYPE #{base_vt} is not supported yet"
+      end
+
+      inferred_vt = W.ruby_to_variant_type(val) rescue nil
+      needs_coercion = inferred_vt && W::VT_FOR_TYPE[inferred_vt] != base_vt
+      if needs_coercion
+        coerce_via_variant_change_type(val, base_vt)
+      else
+        W.pack_variant(base_vt, W.send(pack_method, val))
+      end
+    end
+
+    # Mirrors MRI's ole_val2variant_ex + VariantChangeTypeEx fallback for
+    # a mismatched explicit VARTYPE (spec §4.2) -- e.g.
+    # Variant.new("2e3", VariantType::VT_R4). Native call, CI-only.
+    def coerce_via_variant_change_type(val, base_vt)
+      src_type = W.ruby_to_variant_type(val)
+      src = W.pack_variant(W::VT_FOR_TYPE.fetch(src_type), WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free ||= [])[8, 8])
+      dest = ("\x00" * W::VARIANT_SIZE).b
+      hr = W.variant_change_type.call(dest, src, W::LOCALE_SYSTEM_DEFAULT, 0, base_vt)
+      raise WIN32OLE::RuntimeError, "failed to change variant type: #{W.hr_hex(hr)}" if W.failed?(hr)
+
+      dest
+    end
+  end
 end
