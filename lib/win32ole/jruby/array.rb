@@ -156,12 +156,21 @@ class WIN32OLE
       end
     end
 
+    # Pointer-typed elements (VT_BSTR, VT_DISPATCH, VT_UNKNOWN) are
+    # deliberately absent here: unlike a true scalar, a pointer element
+    # needs real marshaling (BSTR allocation/decoding, IDispatch/IUnknown
+    # refcounting/wrapping) to become a meaningful Ruby value or back --
+    # that marshaling only exists today inside the VT_VARIANT branch (via
+    # WIN32OLE.ruby_value_to_variant_bytes/.variant_bytes_to_ruby_value).
+    # A directly-BSTR/Dispatch/Unknown-typed SAFEARRAY element raises
+    # NotImplementedError (via the .fetch fallback below) until that
+    # marshaling is built for the non-VARIANT scalar path, rather than
+    # packing/unpacking the wrong thing.
     ELEMENT_PACK_FORMAT = {
       W::VT_I1 => 'c', W::VT_UI1 => 'C', W::VT_I2 => 's', W::VT_UI2 => 'S',
       W::VT_I4 => 'l', W::VT_UI4 => 'L', W::VT_INT => 'l', W::VT_UINT => 'L',
       W::VT_I8 => 'q', W::VT_UI8 => 'Q', W::VT_R4 => 'f', W::VT_R8 => 'd',
-      W::VT_ERROR => 'l', W::VT_BOOL => 's',
-      W::VT_BSTR => W::PACK_PTR, W::VT_DISPATCH => W::PACK_PTR, W::VT_UNKNOWN => W::PACK_PTR
+      W::VT_ERROR => 'l', W::VT_BOOL => 's'
     }.freeze
 
     def pack_scalar_element(vt, value)
