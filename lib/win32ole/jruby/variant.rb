@@ -260,9 +260,20 @@ class WIN32OLE
 
     DISP_E_PARAMNOTFOUND = -2147352572 # 0x80020004
 
-    Empty = new(nil, VariantType::VT_EMPTY)
-    Null = new(nil, VariantType::VT_NULL)
-    Nothing = new(nil, VariantType::VT_DISPATCH)
-    NoParam = new(DISP_E_PARAMNOTFOUND, VariantType::VT_ERROR)
+    # Empty/Null/Nothing/NoParam are lazy, not eager: NoParam's construction
+    # calls VariantChangeTypeEx (a real Fiddle.dlopen('oleaut32') on first
+    # use), and every other native call in this codebase is lazy/memoized so
+    # that simply requiring the gem is harmless on any platform. const_missing
+    # preserves the exact same WIN32OLE::Variant::Empty-style constant-access
+    # API MRI provides, while deferring construction to first actual access.
+    def self.const_missing(name)
+      case name
+      when :Empty then const_set(:Empty, new(nil, VariantType::VT_EMPTY))
+      when :Null then const_set(:Null, new(nil, VariantType::VT_NULL))
+      when :Nothing then const_set(:Nothing, new(nil, VariantType::VT_DISPATCH))
+      when :NoParam then const_set(:NoParam, new(DISP_E_PARAMNOTFOUND, VariantType::VT_ERROR))
+      else super
+      end
+    end
   end
 end
