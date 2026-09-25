@@ -18,6 +18,54 @@ class WIN32OLE
   W = Win32
   private_constant :W
 
+  class << self
+    def wrap_dispatch_pointer(ptr)
+      obj = allocate
+      obj.instance_variable_set(:@ptr, ptr)
+      obj.send(:install_finalizer)
+      obj
+    end
+
+    def ruby_value_to_variant_bytes(value, bstrs_to_free)
+      type = W.ruby_to_variant_type(value)
+      payload =
+        case type
+        when :i4 then W.pack_i4(value)
+        when :i8 then W.pack_i8(value)
+        when :r8 then W.pack_r8(value)
+        when :bool then W.pack_bool(value)
+        when :empty then W.pack_empty
+        when :bstr
+          bstr = W.sys_alloc_string.call(W.wstr(value))
+          bstrs_to_free << bstr
+          W.pack_pointer(bstr)
+        when :dispatch
+          W.pack_pointer(value.instance_variable_get(:@ptr))
+        end
+      W.pack_variant(W::VT_FOR_TYPE.fetch(type), payload)
+    end
+
+    def variant_bytes_to_ruby_value(bytes)
+      vt, payload = W.unpack_variant(bytes)
+      type = W.variant_ruby_type(vt)
+      case type
+      when :empty then nil
+      when :i4 then W.unpack_i4(payload)
+      when :i8 then W.unpack_i8(payload)
+      when :r8 then W.unpack_r8(payload)
+      when :bool then W.unpack_bool(payload)
+      when :bstr
+        addr = W.unpack_pointer(payload)
+        str = W.bstr_to_s(addr)
+        W.sys_free_string.call(addr) unless addr.zero?
+        str
+      when :dispatch
+        ptr = W.unpack_pointer(payload)
+        ptr.zero? ? nil : wrap_dispatch_pointer(ptr)
+      end
+    end
+  end
+
   def initialize(server, host = nil)
     raise NotImplementedError, 'remote OLE (host) is not supported yet' unless host.nil?
 
@@ -88,50 +136,11 @@ class WIN32OLE
 
     return nil if plan[:named_put]
 
-    variant_bytes_to_ruby_value(result_bytes)
+    self.class.variant_bytes_to_ruby_value(result_bytes)
   end
 
   def respond_to_missing?(name, include_private = false)
     !dispid_for(name.to_s.sub(/=\z/, '')).nil? || super
-  end
-
-  def ruby_value_to_variant_bytes(value, bstrs_to_free)
-    type = W.ruby_to_variant_type(value)
-    payload =
-      case type
-      when :i4 then W.pack_i4(value)
-      when :i8 then W.pack_i8(value)
-      when :r8 then W.pack_r8(value)
-      when :bool then W.pack_bool(value)
-      when :empty then W.pack_empty
-      when :bstr
-        bstr = W.sys_alloc_string.call(W.wstr(value))
-        bstrs_to_free << bstr
-        W.pack_pointer(bstr)
-      when :dispatch
-        W.pack_pointer(value.instance_variable_get(:@ptr))
-      end
-    W.pack_variant(W::VT_FOR_TYPE.fetch(type), payload)
-  end
-
-  def variant_bytes_to_ruby_value(bytes)
-    vt, payload = W.unpack_variant(bytes)
-    type = W.variant_ruby_type(vt)
-    case type
-    when :empty then nil
-    when :i4 then W.unpack_i4(payload)
-    when :i8 then W.unpack_i8(payload)
-    when :r8 then W.unpack_r8(payload)
-    when :bool then W.unpack_bool(payload)
-    when :bstr
-      addr = W.unpack_pointer(payload)
-      str = W.bstr_to_s(addr)
-      W.sys_free_string.call(addr) unless addr.zero?
-      str
-    when :dispatch
-      ptr = W.unpack_pointer(payload)
-      ptr.zero? ? nil : wrap_dispatch_pointer(ptr)
-    end
   end
 
   public
@@ -180,13 +189,6 @@ class WIN32OLE
   end
 
   private
-
-  def wrap_dispatch_pointer(ptr)
-    obj = self.class.allocate
-    obj.instance_variable_set(:@ptr, ptr)
-    obj.send(:install_finalizer)
-    obj
-  end
 
   def error_detail(hr, excepinfo_bytes)
     if hr == DISP_E_EXCEPTION

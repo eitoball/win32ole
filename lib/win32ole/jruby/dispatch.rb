@@ -27,7 +27,7 @@ class WIN32OLE
       keep_alive = []
       bstrs_to_free = []
 
-      arg_variants = arg_values.reverse.map { |v| ruby_value_to_variant_bytes(v, bstrs_to_free) }
+      arg_variants = arg_values.reverse.map { |v| WIN32OLE.ruby_value_to_variant_bytes(v, bstrs_to_free) }
       args_blob = arg_variants.join
       args_ptr = args_blob.empty? ? nil : W.native_pointer_for(args_blob)
       keep_alive << args_ptr if args_ptr
