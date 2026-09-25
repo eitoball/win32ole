@@ -138,7 +138,7 @@ class WIN32OLE
       if base_vt == VT::VT_VARIANT
         WIN32OLE.variant_bytes_to_ruby_value(Fiddle::Pointer.new(elem_addr)[0, W::VARIANT_SIZE])
       else
-        fmt = SA::ELEMENT_PACK_FORMAT.fetch(base_vt)
+        fmt = SA::ELEMENT_PACK_FORMAT.fetch(base_vt) { raise NotImplementedError, "VARTYPE #{base_vt} is not a supported array element type yet" }
         SA.unpack_scalar_element(base_vt, Fiddle::Pointer.new(elem_addr)[0, [1].pack(fmt).bytesize])
       end
     end
