@@ -229,5 +229,20 @@ class TestWin32 < Test::Unit::TestCase
     assert_equal(0x2000, W::VT_ARRAY)
     assert_equal(0x4000, W::VT_BYREF)
   end
+
+  def test_pack_byref_scalar_points_into_the_body_offset_of_realvar
+    realvar = W.pack_variant(W::VT_I4, W.pack_i4(42))
+    byref = W.pack_byref(W::VT_I4, realvar)
+    vt, payload = W.unpack_variant(byref)
+    assert_equal(W::VT_I4 | W::VT_BYREF, vt)
+    assert_equal(W.native_pointer_for(realvar).to_i + 8, W.unpack_pointer(payload))
+  end
+
+  def test_pack_byref_variant_points_at_the_whole_realvar_buffer
+    realvar = W.pack_variant(W::VT_I4, W.pack_i4(42))
+    byref = W.pack_byref(W::VT_VARIANT, realvar)
+    _vt, payload = W.unpack_variant(byref)
+    assert_equal(W.native_pointer_for(realvar).to_i, W.unpack_pointer(payload))
+  end
 end
 end
