@@ -1,3 +1,4 @@
+require 'fiddle'
 require 'win32ole/jruby/win32'
 require 'win32ole/jruby/array'
 
@@ -121,12 +122,25 @@ class WIN32OLE
     private
 
     def current_array_ptr
-      _vt, payload = W.unpack_variant(@var)
-      W.unpack_pointer(payload)
+      vt, payload = W.unpack_variant(@var)
+      addr = W.unpack_pointer(payload)
+      return addr if (vt & VT::VT_BYREF).zero?
+
+      Fiddle::Pointer.new(addr)[0, W::PTR_SIZE].unpack1(W::PACK_PTR)
     end
 
     def current_scalar_bytes
-      @var
+      vt, payload = W.unpack_variant(@var)
+      return @var if (vt & VT::VT_BYREF).zero?
+
+      base_vt = vt & VT::VT_TYPEMASK
+      addr = W.unpack_pointer(payload)
+      if base_vt == VT::VT_VARIANT
+        Fiddle::Pointer.new(addr)[0, W::VARIANT_SIZE]
+      else
+        body = Fiddle::Pointer.new(addr)[0, 8]
+        W.pack_variant(base_vt, body)
+      end
     end
 
     SCALAR_PACK = {
