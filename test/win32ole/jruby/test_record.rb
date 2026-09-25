@@ -1,6 +1,8 @@
 require 'test/unit'
 
 if RUBY_ENGINE == 'jruby'
+require 'win32ole/jruby/win32ole'
+require 'win32ole/jruby/typelib'
 require 'win32ole/jruby/record'
 
 class TestRecordConstruction < Test::Unit::TestCase
