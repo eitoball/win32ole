@@ -1,6 +1,7 @@
 require 'fiddle'
 require 'win32ole/jruby/win32'
 require 'win32ole/jruby/array'
+require 'win32ole/jruby/win32ole'
 
 class WIN32OLE
   module VariantType
@@ -256,5 +257,12 @@ class WIN32OLE
       addr = Fiddle::Pointer.new(addr)[0, W::PTR_SIZE].unpack1(W::PACK_PTR) if (vt & VT::VT_BYREF) != 0
       [vt & VT::VT_TYPEMASK, addr]
     end
+
+    DISP_E_PARAMNOTFOUND = -2147352572 # 0x80020004
+
+    Empty = new(nil, VariantType::VT_EMPTY)
+    Null = new(nil, VariantType::VT_NULL)
+    Nothing = new(nil, VariantType::VT_DISPATCH)
+    NoParam = new(DISP_E_PARAMNOTFOUND, VariantType::VT_ERROR)
   end
 end
