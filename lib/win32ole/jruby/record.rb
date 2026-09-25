@@ -125,6 +125,36 @@ class WIN32OLE
       @fields[key] = val
     end
 
+    VT_RECORD_BODY_SIZE = W::PTR_SIZE * 2 # BRECORD: { PVOID pvRecord; IRecordInfo *pRecInfo; }
+
+    def to_variant_bytes
+      size_out = ("\x00" * 4).b
+      hr = self.class.get_size_fn(@pri).call(@pri, size_out)
+      raise WIN32OLE::RuntimeError, "failed to get size for allocation of VT_RECORD object: #{W.hr_hex(hr)}" if W.failed?(hr)
+
+      size = size_out.unpack1('L')
+      buffer_ptr = Fiddle::Pointer.malloc(size)
+      hr = self.class.record_init_fn(@pri).call(@pri, buffer_ptr.to_i)
+      raise WIN32OLE::RuntimeError, "failed to initialize VT_RECORD object: #{W.hr_hex(hr)}" if W.failed?(hr)
+
+      @fields.each do |name, val|
+        next if val.nil?
+
+        var_bytes = WIN32OLE.ruby_value_to_variant_bytes(val, [])
+        hr = self.class.put_field_fn(@pri).call(
+          @pri, W::DISPATCH_PROPERTYPUT, buffer_ptr.to_i, W.wstr(name), W.native_pointer_for(var_bytes)
+        )
+        raise WIN32OLE::RuntimeError, "failed to putfield of `#{name}': #{W.hr_hex(hr)}" if W.failed?(hr)
+      end
+
+      body = [buffer_ptr.to_i, @pri].pack("#{W::PACK_PTR}2")
+      W.pack_variant(W::VT_RECORD, body)
+    end
+
+    def self.from_irecordinfo_and_buffer(pri, prec)
+      allocate.tap { |rec| rec.send(:set_record_info, pri, prec) }
+    end
+
     private
 
     def resolve_itypelib_ptr(oleobj)
