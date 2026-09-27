@@ -428,5 +428,37 @@ class WIN32OLE
         oleaut32['VariantChangeTypeEx'], [VOIDP, VOIDP, DWORD, WORD, WORD], LONG, STDCALL
       )
     end
+
+    PM_REMOVE = 0x0001
+    MSG_SIZE = 64
+
+    def user32
+      @user32 ||= Fiddle.dlopen('user32')
+    end
+
+    def peek_message
+      @peek_message ||= Fiddle::Function.new(
+        user32['PeekMessageW'], [VOIDP, VOIDP, DWORD, DWORD, DWORD], DWORD, STDCALL
+      )
+    end
+
+    def translate_message
+      @translate_message ||= Fiddle::Function.new(user32['TranslateMessage'], [VOIDP], DWORD, STDCALL)
+    end
+
+    def dispatch_message
+      @dispatch_message ||= Fiddle::Function.new(user32['DispatchMessageW'], [VOIDP], LONG, STDCALL)
+    end
+
+    def pump_windows_messages
+      msg = Fiddle::Pointer.malloc(MSG_SIZE)
+      while peek_message.call(msg, nil, 0, 0, PM_REMOVE) != 0
+        translate_message.call(msg)
+        dispatch_message.call(msg)
+      end
+      nil
+    ensure
+      Fiddle.free(msg.to_i) if msg
+    end
   end
 end

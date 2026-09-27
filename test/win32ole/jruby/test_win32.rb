@@ -327,5 +327,20 @@ class TestWin32 < Test::Unit::TestCase
     Fiddle.free(vtable.to_i) if vtable
     Fiddle.free(obj.to_i) if obj
   end
+
+  def test_pm_remove_matches_win32_constant
+    assert_equal(0x0001, W::PM_REMOVE)
+  end
+
+  def test_msg_size_is_large_enough_for_a_real_msg_struct
+    # Real MSG is 48 bytes on x64 / 28 on x86 (HWND hwnd; UINT message; WPARAM
+    # wParam; LPARAM lParam; DWORD time; POINT pt). We never read MSG's own
+    # fields (just pass the pointer PeekMessage filled in on to
+    # TranslateMessage/DispatchMessage), so exact layout doesn't matter --
+    # only that the scratch buffer is big enough for the OS to write into
+    # without corrupting adjacent memory.
+    minimum = W::PTR_SIZE == 8 ? 48 : 28
+    assert_operator(W::MSG_SIZE, :>=, minimum)
+  end
 end
 end
