@@ -134,6 +134,19 @@ class WIN32OLE
     def hresult_detail(hr)
       "    HRESULT error code:#{W.hr_hex(hr)}\n      #{W.hresult_system_message(hr)}"
     end
+
+    def const_load(ole, mod)
+      ole.ole_type.ole_typelib.ole_types.each do |type|
+        type.variables.each do |var|
+          next unless var.variable_kind == 'CONSTANT'
+          next if mod.const_defined?(var.name, false)
+
+          mod.const_set(var.name, var.value)
+        end
+      end
+      nil
+    end
+
     private :resolve_clsid, :hresult_detail
   end
 
