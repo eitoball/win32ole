@@ -274,5 +274,58 @@ class TestWin32 < Test::Unit::TestCase
     Fiddle::Pointer.new(ptr.to_i)[0, 4] = [99].pack('l')
     assert_equal(99, W.unpack_i4(ptr[0, 4]))
   end
+
+  def test_new_iid_constants_are_16_bytes
+    [W::IID_IUNKNOWN, W::IID_ICONNECTIONPOINTCONTAINER, W::IID_IPROVIDECLASSINFO, W::IID_IPROVIDECLASSINFO2].each do |iid|
+      assert_equal(16, iid.bytesize)
+    end
+  end
+
+  def test_iid_iunknown_matches_known_bytes
+    # {00000000-0000-0000-C000-000000000046}
+    expected = [0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46].pack('LSSC8')
+    assert_equal(expected, W::IID_IUNKNOWN)
+  end
+
+  def test_new_iid_constants_are_pairwise_distinct
+    iids = [W::IID_IUNKNOWN, W::IID_ICONNECTIONPOINTCONTAINER, W::IID_IPROVIDECLASSINFO, W::IID_IPROVIDECLASSINFO2, W::IID_IDISPATCH]
+    assert_equal(iids.size, iids.uniq.size)
+  end
+
+  def test_query_interface_reads_hr_and_returns_nil_on_failure
+    # Fake object: first pointer-sized field is a vtable whose slot 0
+    # (QueryInterface) is a closure that always fails. No live COM needed --
+    # this is the same "malloc a fake vtable" technique test_win32.rb already
+    # uses for test_vtable_address_reads_the_first_pointer_sized_field.
+    qi = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, _riid, ppv|
+      ppv[0, W::PTR_SIZE] = [0].pack(W::PACK_PTR)
+      -2147467262 # E_NOINTERFACE
+    end
+    vtable = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    vtable[0, W::PTR_SIZE] = [qi.to_i].pack(W::PACK_PTR)
+    obj = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    obj[0, W::PTR_SIZE] = [vtable.to_i].pack(W::PACK_PTR)
+
+    assert_nil(W.query_interface(obj.to_i, ("\x00" * 16).b))
+  ensure
+    Fiddle.free(vtable.to_i) if vtable
+    Fiddle.free(obj.to_i) if obj
+  end
+
+  def test_query_interface_returns_the_ppv_pointer_on_success
+    qi = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, _riid, ppv|
+      ppv[0, W::PTR_SIZE] = [0x123456].pack(W::PACK_PTR)
+      0
+    end
+    vtable = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    vtable[0, W::PTR_SIZE] = [qi.to_i].pack(W::PACK_PTR)
+    obj = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    obj[0, W::PTR_SIZE] = [vtable.to_i].pack(W::PACK_PTR)
+
+    assert_equal(0x123456, W.query_interface(obj.to_i, ("\x00" * 16).b))
+  ensure
+    Fiddle.free(vtable.to_i) if vtable
+    Fiddle.free(obj.to_i) if obj
+  end
 end
 end

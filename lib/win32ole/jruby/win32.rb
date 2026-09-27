@@ -56,6 +56,15 @@ class WIN32OLE
     IID_NULL      = ("\x00" * 16).b
     IID_IDISPATCH = [0x00020400, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46].pack('LSSC8')
 
+    # Well-known, decades-stable OLE Automation interface IDs (ocidl.h /
+    # objbase.h). Hand-transcribed, not pulled from a live header -- verify
+    # against a real Windows build before anything else depends on it (same
+    # caution Phase 3 gave IRecordInfo's vtable; see this plan's §8 risk #1).
+    IID_IUNKNOWN = [0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46].pack('LSSC8')
+    IID_ICONNECTIONPOINTCONTAINER = [0xB196B284, 0xBAB4, 0x101A, 0xB6, 0x9C, 0x00, 0xAA, 0x00, 0x34, 0x1D, 0x07].pack('LSSC8')
+    IID_IPROVIDECLASSINFO = [0xB196B283, 0xBAB4, 0x101A, 0xB6, 0x9C, 0x00, 0xAA, 0x00, 0x34, 0x1D, 0x07].pack('LSSC8')
+    IID_IPROVIDECLASSINFO2 = [0xA6BC3AC0, 0xDBAA, 0x11CE, 0x9D, 0xE3, 0x00, 0xAA, 0x00, 0x4B, 0xB8, 0x51].pack('LSSC8')
+
     VT_FOR_TYPE = {
       i4: VT_I4, i8: VT_I8, r8: VT_R8, bool: VT_BOOL,
       empty: VT_EMPTY, bstr: VT_BSTR, dispatch: VT_DISPATCH
@@ -334,6 +343,18 @@ class WIN32OLE
       vtable_addr = vtable_address(object_addr)
       func_addr = Fiddle::Pointer.new(vtable_addr)[index * PTR_SIZE, PTR_SIZE].unpack1(PTR_SIZE == 8 ? 'Q' : 'L')
       Fiddle::Function.new(func_addr, arg_types, ret_type, STDCALL)
+    end
+
+    # Generic COM QueryInterface, usable against any interface pointer --
+    # every other vtable helper in this codebase is for a FIXED interface
+    # (IDispatch/ITypeInfo/ITypeLib); WIN32OLE::Event is the first caller
+    # that needs to ask an arbitrary object for an arbitrary interface.
+    def query_interface(obj_addr, iid_bytes)
+      ppv = ("\x00" * PTR_SIZE).b
+      hr = vtable_function(obj_addr, 0, [VOIDP, VOIDP, VOIDP], LONG).call(obj_addr, iid_bytes, ppv)
+      return nil if failed?(hr)
+
+      ppv.unpack1(PACK_PTR)
     end
 
     def bstr_to_s(addr)
