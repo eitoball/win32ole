@@ -204,5 +204,60 @@ class TestTypeInfo < Test::Unit::TestCase
     msg = WIN32OLE::Win32.query_interface_error_message('GetTypeInfo', 'boom')
     assert_match(/\Afailed to GetTypeInfo: boom\z/, msg)
   end
+
+  def fake_vtable_object(slot_count)
+    vtable = Fiddle::Pointer.malloc(WIN32OLE::Win32::PTR_SIZE * slot_count)
+    slot_count.times { |i| vtable[i * WIN32OLE::Win32::PTR_SIZE, WIN32OLE::Win32::PTR_SIZE] = [0x1000 + i].pack(WIN32OLE::Win32::PACK_PTR) }
+    obj = Fiddle::Pointer.malloc(WIN32OLE::Win32::PTR_SIZE)
+    obj[0, WIN32OLE::Win32::PTR_SIZE] = [vtable.to_i].pack(WIN32OLE::Win32::PACK_PTR)
+    [obj, vtable]
+  end
+
+  def test_impl_type_flags_fn_resolves_the_documented_slot_and_memoizes
+    obj, vtable = fake_vtable_object(10)
+    fn1 = TI.impl_type_flags_fn(obj.to_i)
+    fn2 = TI.impl_type_flags_fn(obj.to_i)
+    assert_same(fn1, fn2)
+    assert_equal(0x1000 + TI::ITYPEINFO_VTBL[:GetImplTypeFlags], fn1.to_i)
+  ensure
+    Fiddle.free(vtable.to_i) if vtable
+    Fiddle.free(obj.to_i) if obj
+  end
+
+  def test_ref_type_of_impl_type_fn_resolves_the_documented_slot
+    obj, vtable = fake_vtable_object(10)
+    fn = TI.ref_type_of_impl_type_fn(obj.to_i)
+    assert_equal(0x1000 + TI::ITYPEINFO_VTBL[:GetRefTypeOfImplType], fn.to_i)
+  ensure
+    Fiddle.free(vtable.to_i) if vtable
+    Fiddle.free(obj.to_i) if obj
+  end
+
+  def test_get_names_fn_resolves_the_documented_slot
+    obj, vtable = fake_vtable_object(10)
+    fn = TI.get_names_fn(obj.to_i)
+    assert_equal(0x1000 + TI::ITYPEINFO_VTBL[:GetNames], fn.to_i)
+  ensure
+    Fiddle.free(vtable.to_i) if vtable
+    Fiddle.free(obj.to_i) if obj
+  end
+
+  def test_get_ids_of_names_fn_resolves_the_documented_slot
+    obj, vtable = fake_vtable_object(11)
+    fn = TI.get_ids_of_names_fn(obj.to_i)
+    assert_equal(0x1000 + TI::ITYPEINFO_VTBL[:GetIDsOfNames], fn.to_i)
+  ensure
+    Fiddle.free(vtable.to_i) if vtable
+    Fiddle.free(obj.to_i) if obj
+  end
+
+  def test_type_info_of_guid_fn_resolves_the_documented_slot
+    obj, vtable = fake_vtable_object(7)
+    fn = TI.type_info_of_guid_fn(obj.to_i)
+    assert_equal(0x1000 + TI::ITYPELIB_VTBL[:GetTypeInfoOfGuid], fn.to_i)
+  ensure
+    Fiddle.free(vtable.to_i) if vtable
+    Fiddle.free(obj.to_i) if obj
+  end
 end
 end

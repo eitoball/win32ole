@@ -246,6 +246,41 @@ class WIN32OLE
       )
     end
 
+    def impl_type_flags_fn(itypeinfo_ptr)
+      @impl_type_flags_fns ||= {}
+      @impl_type_flags_fns[W.vtable_address(itypeinfo_ptr)] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetImplTypeFlags], [W::VOIDP, W::DWORD, W::VOIDP], W::LONG
+      )
+    end
+
+    def ref_type_of_impl_type_fn(itypeinfo_ptr)
+      @ref_type_of_impl_type_fns ||= {}
+      @ref_type_of_impl_type_fns[W.vtable_address(itypeinfo_ptr)] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetRefTypeOfImplType], [W::VOIDP, W::DWORD, W::VOIDP], W::LONG
+      )
+    end
+
+    def get_names_fn(itypeinfo_ptr)
+      @get_names_fns ||= {}
+      @get_names_fns[W.vtable_address(itypeinfo_ptr)] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetNames], [W::VOIDP, W::LONG, W::VOIDP, W::DWORD, W::VOIDP], W::LONG
+      )
+    end
+
+    def get_ids_of_names_fn(itypeinfo_ptr)
+      @get_ids_of_names_fns ||= {}
+      @get_ids_of_names_fns[W.vtable_address(itypeinfo_ptr)] ||= W.vtable_function(
+        itypeinfo_ptr, ITYPEINFO_VTBL[:GetIDsOfNames], [W::VOIDP, W::VOIDP, W::DWORD, W::VOIDP], W::LONG
+      )
+    end
+
+    def type_info_of_guid_fn(itypelib_ptr)
+      @type_info_of_guid_fns ||= {}
+      @type_info_of_guid_fns[W.vtable_address(itypelib_ptr)] ||= W.vtable_function(
+        itypelib_ptr, ITYPELIB_VTBL[:GetTypeInfoOfGuid], [W::VOIDP, W::VOIDP, W::VOIDP], W::LONG
+      )
+    end
+
     HKEY_CLASSES_ROOT = 0x80000000
     KEY_READ = 0x20019
     REG_SZ = 1
