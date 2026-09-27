@@ -102,6 +102,23 @@ class WIN32OLE
         ptr.zero? ? nil : wrap_dispatch_pointer(ptr)
       end
     end
+
+    def resolve_clsid(server)
+      wide = W.wstr(server)
+      clsid = ("\x00" * 16).b
+      hr = W.clsid_from_progid.call(wide, clsid)
+      hr = W.clsid_from_string.call(wide, clsid) if W.failed?(hr)
+      if W.failed?(hr)
+        raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{hresult_detail(hr)}"
+      end
+
+      clsid
+    end
+
+    def hresult_detail(hr)
+      "    HRESULT error code:#{W.hr_hex(hr)}\n      #{W.hresult_system_message(hr)}"
+    end
+    private :resolve_clsid, :hresult_detail
   end
 
   def initialize(server, host = nil)
@@ -110,13 +127,13 @@ class WIN32OLE
     hr = W.co_initialize.call(nil)
     raise 'fail: OLE initialize' unless hr.zero? || hr == 1
 
-    clsid = resolve_clsid(server)
+    clsid = self.class.send(:resolve_clsid, server)
     ppv = ("\x00" * W::PTR_SIZE).b
     hr = W.co_create_instance.call(
       clsid, nil, W::CLSCTX_INPROC_SERVER | W::CLSCTX_LOCAL_SERVER, W::IID_IDISPATCH, ppv
     )
     if W.failed?(hr)
-      raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{hresult_detail(hr)}"
+      raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{self.class.send(:hresult_detail, hr)}"
     end
 
     @ptr = ppv.unpack1(W::PTR_SIZE == 8 ? 'Q' : 'L')
@@ -124,22 +141,6 @@ class WIN32OLE
   end
 
   private
-
-  def resolve_clsid(server)
-    wide = W.wstr(server)
-    clsid = ("\x00" * 16).b
-    hr = W.clsid_from_progid.call(wide, clsid)
-    hr = W.clsid_from_string.call(wide, clsid) if W.failed?(hr)
-    if W.failed?(hr)
-      raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{hresult_detail(hr)}"
-    end
-
-    clsid
-  end
-
-  def hresult_detail(hr)
-    "    HRESULT error code:#{W.hr_hex(hr)}\n      #{W.hresult_system_message(hr)}"
-  end
 
   def install_finalizer
     ptr = @ptr
@@ -182,6 +183,15 @@ class WIN32OLE
   end
 
   public
+
+  # WIN32OLE::Event needs this raw IDispatch* to build its own COM
+  # connections (QueryInterface for IConnectionPointContainer,
+  # IProvideClassInfo2, etc.) -- there is no general-purpose
+  # QueryInterface API (#ole_query_interface is a Phase 2 non-goal), so
+  # this is Event's one deliberate, documented crack in encapsulation.
+  def dispatch_ptr
+    @ptr
+  end
 
   def ole_type
     type_info_ptr = get_type_info_ptr
@@ -234,9 +244,9 @@ class WIN32OLE
       source = W.bstr_to_s(info[:bstr_source_ptr]) || '<Unknown>'
       description = W.bstr_to_s(info[:bstr_description_ptr]) || '<No Description>'
       code = info[:w_code].zero? ? (info[:scode] & 0xFFFFFFFF).to_s(16).upcase : info[:w_code].to_s
-      "\n    OLE error code:#{code} in #{source}\n      #{description}\n#{hresult_detail(hr)}"
+      "\n    OLE error code:#{code} in #{source}\n      #{description}\n#{self.class.send(:hresult_detail, hr)}"
     else
-      "\n#{hresult_detail(hr)}"
+      "\n#{self.class.send(:hresult_detail, hr)}"
     end
   end
 
