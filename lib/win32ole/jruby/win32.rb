@@ -261,6 +261,10 @@ class WIN32OLE
       )
     end
 
+    def get_active_object
+      @get_active_object ||= Fiddle::Function.new(oleaut32['GetActiveObject'], [VOIDP, VOIDP, VOIDP], LONG, STDCALL)
+    end
+
     def co_task_mem_free
       @co_task_mem_free ||= Fiddle::Function.new(ole32['CoTaskMemFree'], [VOIDP], VOID, STDCALL)
     end

@@ -29,6 +29,22 @@ class WIN32OLE
       obj
     end
 
+    def connect(server, host = nil)
+      raise NotImplementedError, 'remote OLE (host) is not supported yet' unless host.nil?
+
+      hr = W.co_initialize.call(nil)
+      raise 'fail: OLE initialize' unless hr.zero? || hr == 1
+
+      clsid = resolve_clsid(server)
+      ppv = ("\x00" * W::PTR_SIZE).b
+      hr = W.get_active_object.call(clsid, nil, ppv)
+      if W.failed?(hr)
+        raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{hresult_detail(hr)}"
+      end
+
+      wrap_dispatch_pointer(ppv.unpack1(W::PACK_PTR))
+    end
+
     def ruby_value_to_variant_bytes(value, bstrs_to_free)
       case value
       when ::Array
