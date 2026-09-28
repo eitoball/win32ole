@@ -340,6 +340,116 @@ class TestEvent < Test::Unit::TestCase
     Fiddle.free(ref1.to_i) if ref1
   end
 
+  def test_write_byref_variant_ignores_a_null_byref_pointer
+    ev = WIN32OLE::Event.allocate
+    var = W.pack_variant(W::VT_I4 | W::VT_BYREF, W.pack_pointer(0))
+    var_ptr = Fiddle::Pointer.to_ptr(var)
+    assert_nil(ev.send(:write_byref_variant, var_ptr, 42)) # ref_addr is null -- must not dereference
+  end
+
+  def test_write_byref_variant_writes_a_ui1
+    ev = WIN32OLE::Event.allocate
+    var_ptr, ref_buf = fake_byref_variant(W::VT_UI1, 1)
+    ev.send(:write_byref_variant, var_ptr, 200)
+    assert_equal(200, ref_buf[0, 1].unpack1('C'))
+  ensure
+    Fiddle.free(ref_buf.to_i) if ref_buf
+  end
+
+  def test_write_byref_variant_writes_a_false_bool
+    ev = WIN32OLE::Event.allocate
+    var_ptr, ref_buf = fake_byref_variant(W::VT_BOOL, 2)
+    ref_buf[0, 2] = [-1].pack('s') # pre-seed with "true" so a no-op would be caught
+    ev.send(:write_byref_variant, var_ptr, false)
+    assert_equal(0, ref_buf[0, 2].unpack1('s'))
+  ensure
+    Fiddle.free(ref_buf.to_i) if ref_buf
+  end
+
+  def test_write_byref_variant_writes_a_float_into_r4
+    ev = WIN32OLE::Event.allocate
+    var_ptr, ref_buf = fake_byref_variant(W::VT_R4, 4)
+    ev.send(:write_byref_variant, var_ptr, 2.5)
+    assert_in_delta(2.5, ref_buf[0, 4].unpack1('f'), 0.0001)
+  ensure
+    Fiddle.free(ref_buf.to_i) if ref_buf
+  end
+
+  # SysAllocString itself lives in oleaut32.dll, which is not loadable on
+  # this (non-Windows) machine -- see W.sys_alloc_string. We stub it here
+  # purely to exercise write_byref_variant's own String/VT_BSTR branch
+  # (that it calls sys_alloc_string with a UTF-16LE-encoded copy of the
+  # value and writes the returned pointer into the ref slot) without
+  # depending on the real DLL.
+  def test_write_byref_variant_writes_a_bstr
+    ev = WIN32OLE::Event.allocate
+    var_ptr, ref_buf = fake_byref_variant(W::VT_BSTR, W::PTR_SIZE)
+    original_sys_alloc_string = W.method(:sys_alloc_string)
+    fake_bstr_addr = 0x1234
+    received_wstr = nil
+    fake_fn = Object.new
+    fake_fn.define_singleton_method(:call) do |wstr_bytes|
+      received_wstr = wstr_bytes
+      fake_bstr_addr
+    end
+    W.define_singleton_method(:sys_alloc_string) { fake_fn }
+
+    ev.send(:write_byref_variant, var_ptr, 'hello')
+
+    assert_equal(fake_bstr_addr, ref_buf[0, W::PTR_SIZE].unpack1(W::PACK_PTR))
+    assert_equal(W.wstr('hello'), received_wstr)
+  ensure
+    W.define_singleton_method(:sys_alloc_string, original_sys_alloc_string) if original_sys_alloc_string
+    Fiddle.free(ref_buf.to_i) if ref_buf
+  end
+
+  def test_write_array_outargs_stops_when_the_array_is_longer_than_cargs
+    ev = WIN32OLE::Event.allocate
+    rgvarg = Fiddle::Pointer.malloc(W::VARIANT_SIZE * 2)
+    ref0 = Fiddle::Pointer.malloc(4)
+    ref1 = Fiddle::Pointer.malloc(4)
+    rgvarg[1 * W::VARIANT_SIZE, W::VARIANT_SIZE] = W.pack_variant(W::VT_I4 | W::VT_BYREF, W.pack_pointer(ref0.to_i)) # arg 0
+    rgvarg[0 * W::VARIANT_SIZE, W::VARIANT_SIZE] = W.pack_variant(W::VT_I4 | W::VT_BYREF, W.pack_pointer(ref1.to_i)) # arg 1
+
+    # 33 has no matching rgvarg slot (cargs is 2) -- must not overrun rgvarg
+    ev.send(:write_array_outargs, [11, 22, 33], 2, rgvarg.to_i)
+
+    assert_equal(11, ref0[0, 4].unpack1('l'))
+    assert_equal(22, ref1[0, 4].unpack1('l'))
+  ensure
+    Fiddle.free(rgvarg.to_i) if rgvarg
+    Fiddle.free(ref0.to_i) if ref0
+    Fiddle.free(ref1.to_i) if ref1
+  end
+
+  # Guards against the priority bug class where the Hash check and the
+  # outargs-Array check are written as two independent `if`s instead of
+  # `if/elsif` -- with with_outargs: true AND a Hash return, both
+  # conditions would be true, so a regression would call both write paths
+  # instead of only write_hash_result. write_hash_result itself needs a
+  # live ITypeInfo::GetNames call (COM-only), so we spy on both methods
+  # rather than let them run for real.
+  def test_handle_invoke_prefers_hash_writeback_over_array_outargs
+    ev = WIN32OLE::Event.allocate
+    ev.instance_variable_set(:@events, [{ name: nil, proc: proc { { 0 => 1 } }, with_outargs: true }])
+    ev.instance_variable_set(:@handler, nil)
+    ev.instance_variable_set(:@event_typeinfo_ptr, 0)
+    ev.define_singleton_method(:resolve_event_name) { |_dispid| 'Whatever' }
+
+    hash_called = false
+    array_called = false
+    ev.define_singleton_method(:write_hash_result) { |*_args| hash_called = true }
+    ev.define_singleton_method(:write_array_outargs) { |*_args| array_called = true }
+
+    dispparams = [0, 0, 0, 0].pack("#{W::PACK_PTR}#{W::PACK_PTR}LL")
+    dispparams_ptr = Fiddle::Pointer.to_ptr(dispparams)
+
+    ev.send(:handle_invoke, 1, dispparams_ptr, nil)
+
+    assert(hash_called)
+    assert_false(array_called)
+  end
+
   def capture_stderr
     old = $stderr
     $stderr = StringIO.new
