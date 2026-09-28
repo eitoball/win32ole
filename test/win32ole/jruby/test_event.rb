@@ -5,6 +5,96 @@ require 'win32ole/jruby/event'
 
 class TestEvent < Test::Unit::TestCase
   W = WIN32OLE::Win32
+  E_NOINTERFACE = -2147467262
+  DISP_E_BADINDEX = -2147352565
+
+  def build_test_sink(source_iid_bytes = ("\x01" * 16).b, event_typeinfo_ptr = 0)
+    ev = WIN32OLE::Event.allocate
+    sink_addr, vtable_addr, closures = ev.send(:build_sink, source_iid_bytes, event_typeinfo_ptr)
+    [sink_addr, vtable_addr, closures]
+  end
+
+  def test_query_interface_closure_returns_sink_for_known_and_source_iids
+    source_iid = ("\x01" * 16).b
+    sink_addr, vtable_addr, closures = build_test_sink(source_iid)
+    qi_fn = Fiddle::Function.new(closures[0], [W::VOIDP, W::VOIDP, W::VOIDP], W::LONG)
+    ppv = ("\xFF" * W::PTR_SIZE).b
+
+    assert_equal(0, qi_fn.call(sink_addr, W::IID_IUNKNOWN, ppv))
+    assert_equal(sink_addr, ppv.unpack1(W::PACK_PTR))
+
+    assert_equal(0, qi_fn.call(sink_addr, W::IID_IDISPATCH, ppv))
+    assert_equal(sink_addr, ppv.unpack1(W::PACK_PTR))
+
+    assert_equal(0, qi_fn.call(sink_addr, source_iid, ppv))
+    assert_equal(sink_addr, ppv.unpack1(W::PACK_PTR))
+  ensure
+    Fiddle.free(vtable_addr) if vtable_addr
+    Fiddle.free(sink_addr) if sink_addr
+  end
+
+  def test_query_interface_closure_rejects_unknown_iid
+    sink_addr, vtable_addr, closures = build_test_sink
+    qi_fn = Fiddle::Function.new(closures[0], [W::VOIDP, W::VOIDP, W::VOIDP], W::LONG)
+    ppv = ("\xFF" * W::PTR_SIZE).b
+
+    assert_equal(E_NOINTERFACE, qi_fn.call(sink_addr, ("\xFE" * 16).b, ppv))
+    assert_equal(0, ppv.unpack1(W::PACK_PTR))
+  ensure
+    Fiddle.free(vtable_addr) if vtable_addr
+    Fiddle.free(sink_addr) if sink_addr
+  end
+
+  def test_add_ref_and_release_closures_share_a_refcount
+    sink_addr, vtable_addr, closures = build_test_sink
+    add_ref_fn = Fiddle::Function.new(closures[1], [W::VOIDP], W::DWORD)
+    release_fn = Fiddle::Function.new(closures[2], [W::VOIDP], W::DWORD)
+
+    assert_equal(1, add_ref_fn.call(sink_addr))
+    assert_equal(2, add_ref_fn.call(sink_addr))
+    assert_equal(1, release_fn.call(sink_addr))
+    assert_equal(0, release_fn.call(sink_addr))
+  ensure
+    Fiddle.free(vtable_addr) if vtable_addr
+    Fiddle.free(sink_addr) if sink_addr
+  end
+
+  def test_get_type_info_count_closure_always_reports_zero
+    sink_addr, vtable_addr, closures = build_test_sink
+    fn = Fiddle::Function.new(closures[3], [W::VOIDP, W::VOIDP], W::LONG)
+    pct = ("\xFF" * 4).b
+
+    assert_equal(0, fn.call(sink_addr, pct))
+    assert_equal(0, pct.unpack1('L'))
+  ensure
+    Fiddle.free(vtable_addr) if vtable_addr
+    Fiddle.free(sink_addr) if sink_addr
+  end
+
+  def test_get_type_info_closure_always_fails_with_bad_index
+    sink_addr, vtable_addr, closures = build_test_sink
+    fn = Fiddle::Function.new(closures[4], [W::VOIDP, W::DWORD, W::DWORD, W::VOIDP], W::LONG)
+    ppti = ("\xFF" * W::PTR_SIZE).b
+
+    assert_equal(DISP_E_BADINDEX, fn.call(sink_addr, 0, 0, ppti))
+    assert_equal(0, ppti.unpack1(W::PACK_PTR))
+  ensure
+    Fiddle.free(vtable_addr) if vtable_addr
+    Fiddle.free(sink_addr) if sink_addr
+  end
+
+  def test_build_sink_wires_all_seven_vtable_slots_to_the_closures
+    sink_addr, vtable_addr, closures = build_test_sink
+    assert_equal(7, closures.size)
+    closures.each_with_index do |closure, i|
+      slot = Fiddle::Pointer.new(vtable_addr)[i * W::PTR_SIZE, W::PTR_SIZE].unpack1(W::PACK_PTR)
+      assert_equal(closure.to_i, slot)
+    end
+    assert_equal(vtable_addr, Fiddle::Pointer.new(sink_addr)[0, W::PTR_SIZE].unpack1(W::PACK_PTR))
+  ensure
+    Fiddle.free(vtable_addr) if vtable_addr
+    Fiddle.free(sink_addr) if sink_addr
+  end
 
   def test_new_raises_type_error_for_non_win32ole_argument
     assert_raise(TypeError) { WIN32OLE::Event.new('A') }

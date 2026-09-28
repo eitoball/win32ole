@@ -363,5 +363,106 @@ class WIN32OLE
 
       event.to_s
     end
+
+    SINK_VTBL_SLOTS = 7
+
+    def query_interface_closure(sink_addr, source_iid_bytes, refcount)
+      Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, riid_ptr, ppv_ptr|
+        riid = riid_ptr[0, 16]
+        if riid == W::IID_IUNKNOWN || riid == W::IID_IDISPATCH || riid == source_iid_bytes
+          ppv_ptr[0, W::PTR_SIZE] = [sink_addr].pack(W::PACK_PTR)
+          refcount[0] += 1
+          0
+        else
+          ppv_ptr[0, W::PTR_SIZE] = [0].pack(W::PACK_PTR)
+          E_NOINTERFACE
+        end
+      rescue StandardError, ScriptError => e
+        warn_closure_exception('QueryInterface', e)
+        E_NOINTERFACE
+      end
+    end
+
+    def add_ref_closure(refcount)
+      Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) do |_this|
+        refcount[0] += 1
+      end
+    end
+
+    def release_closure(refcount)
+      Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) do |_this|
+        refcount[0] -= 1
+        refcount[0]
+      end
+    end
+
+    def get_type_info_count_closure
+      Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP], W::STDCALL) do |_this, pct_ptr|
+        pct_ptr[0, 4] = [0].pack('L')
+        0
+      end
+    end
+
+    def get_type_info_closure
+      Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::DWORD, W::DWORD, W::VOIDP], W::STDCALL) do |_this, _idx, _lcid, ppti_ptr|
+        ppti_ptr[0, W::PTR_SIZE] = [0].pack(W::PACK_PTR)
+        DISP_E_BADINDEX
+      end
+    end
+
+    def get_ids_of_names_closure(event_typeinfo_ptr)
+      Fiddle::Closure::BlockCaller.new(
+        W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP, W::DWORD, W::DWORD, W::VOIDP], W::STDCALL
+      ) do |_this, _riid, names_ptr, cnames, _lcid, dispids_ptr|
+        TI.get_ids_of_names_fn(event_typeinfo_ptr).call(event_typeinfo_ptr, names_ptr.to_i, cnames, dispids_ptr.to_i)
+      rescue StandardError, ScriptError => e
+        warn_closure_exception('GetIDsOfNames', e)
+        DISP_E_UNKNOWNNAME
+      end
+    end
+
+    DISP_E_UNKNOWNNAME = -2147352570
+    E_NOINTERFACE = -2147467262
+    DISP_E_BADINDEX = -2147352565
+
+    def warn_closure_exception(where, error)
+      warn "#{error.backtrace&.first}: #{error.message} (#{error.class}) in WIN32OLE::Event sink's #{where}"
+    end
+
+    def invoke_closure(_event_typeinfo_ptr)
+      Fiddle::Closure::BlockCaller.new(
+        W::LONG, [W::VOIDP, W::LONG, W::VOIDP, W::DWORD, W::WORD, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL
+      ) { |*| 0 } # NOERROR; replaced with real dispatch in Task 12
+    end
+
+    # Builds a fresh 7-slot IDispatch-shaped vtable (QueryInterface, AddRef,
+    # Release, GetTypeInfoCount, GetTypeInfo, GetIDsOfNames, Invoke -- same
+    # order/shape as ext/win32ole/win32ole_event.c's IEventSinkVtbl) backed
+    # by Fiddle::Closure::BlockCaller trampolines. Returns raw addresses (not
+    # Fiddle::Pointer wrappers) plus the closures themselves -- the CALLER
+    # must keep `closures` referenced for as long as the sink is advised
+    # (GC'ing a Closure frees its native trampoline), matching variant.rb's
+    # own finalizer-state discipline (see #advise, Task 13).
+    def build_sink(source_iid_bytes, event_typeinfo_ptr)
+      sink_ptr = Fiddle::Pointer.malloc(W::PTR_SIZE)
+      sink_addr = sink_ptr.to_i
+      refcount = [0]
+
+      closures = [
+        query_interface_closure(sink_addr, source_iid_bytes, refcount),
+        add_ref_closure(refcount),
+        release_closure(refcount),
+        get_type_info_count_closure,
+        get_type_info_closure,
+        get_ids_of_names_closure(event_typeinfo_ptr),
+        invoke_closure(event_typeinfo_ptr)
+      ]
+
+      vtable_ptr = Fiddle::Pointer.malloc(W::PTR_SIZE * SINK_VTBL_SLOTS)
+      closures.each_with_index { |c, i| vtable_ptr[i * W::PTR_SIZE, W::PTR_SIZE] = [c.to_i].pack(W::PACK_PTR) }
+      sink_ptr[0, W::PTR_SIZE] = [vtable_ptr.to_i].pack(W::PACK_PTR)
+
+      [sink_addr, vtable_ptr.to_i, closures]
+    end
   end
 end
