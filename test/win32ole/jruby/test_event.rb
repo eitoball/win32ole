@@ -111,5 +111,13 @@ class TestEvent < Test::Unit::TestCase
     ev.handler = handler
     assert_same(handler, ev.handler)
   end
+
+  def test_find_iid_by_name_is_private
+    assert(WIN32OLE::Event.private_method_defined?(:find_iid_by_name))
+  end
+
+  def test_find_iid_by_guid_is_private
+    assert(WIN32OLE::Event.private_method_defined?(:find_iid_by_guid))
+  end
 end
 end
