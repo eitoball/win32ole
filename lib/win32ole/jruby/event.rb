@@ -15,6 +15,8 @@ class WIN32OLE
       @handler = nil
       @finalizer_state = nil
       @sink_closures = nil
+      @event_typeinfo_ptr = nil
+      @ole = nil
 
       advise(ole, itf)
     end
@@ -48,8 +50,15 @@ class WIN32OLE
     def unadvise
       return nil if @finalizer_state.nil? || @finalizer_state[:cp_ptr].nil?
 
+      # ext/win32ole/win32ole_event.c:1164 (fev_unadvise): drain the message
+      # queue BEFORE Unadvise, so an already-queued event can't fire into a
+      # sink we are about to tear down. Deliberately NOT done in
+      # self.finalizer -- a finalizer runs at GC time with no well-defined
+      # thread or message-loop context.
+      W.pump_windows_messages
+
       cp_ptr = @finalizer_state[:cp_ptr]
-      W.vtable_function(cp_ptr, 6, [W::DWORD], W::LONG).call(cp_ptr, @finalizer_state[:cookie])
+      W.vtable_function(cp_ptr, 6, [W::VOIDP, W::DWORD], W::LONG).call(cp_ptr, @finalizer_state[:cookie])
       W.vtable_function(cp_ptr, 2, [W::VOIDP], W::DWORD).call(cp_ptr)
       ti_ptr = @finalizer_state[:ti_ptr]
       W.vtable_function(ti_ptr, 2, [W::VOIDP], W::DWORD).call(ti_ptr) if ti_ptr && !ti_ptr.zero?
@@ -61,12 +70,14 @@ class WIN32OLE
       @finalizer_state[:sink_addr] = nil
       @finalizer_state[:vtable_addr] = nil
       @sink_closures = nil
+      @event_typeinfo_ptr = nil
       nil
     end
 
     private
 
     TKIND_COCLASS = 5
+    private_constant :TKIND_COCLASS
 
     def release_ptr(ptr)
       return if ptr.nil? || ptr.zero?
@@ -198,6 +209,7 @@ class WIN32OLE
     IMPLTYPEFLAG_FDEFAULT = 0x1
     IMPLTYPEFLAG_FSOURCE = 0x2
     GUIDKIND_DEFAULT_SOURCE_DISP_IID = 1
+    private_constant :IMPLTYPEFLAG_FDEFAULT, :IMPLTYPEFLAG_FSOURCE, :GUIDKIND_DEFAULT_SOURCE_DISP_IID
 
     def impl_type_flags(itypeinfo_ptr, index)
       flags_out = ("\x00" * 4).b
@@ -230,6 +242,10 @@ class WIN32OLE
       target_attr_ptr = type_attr_ptr(ti_ptr)
       target_guid = target_attr_ptr && type_guid(target_attr_ptr)
       TI.release_type_attr_fn(ti_ptr).call(ti_ptr, target_attr_ptr) if target_attr_ptr
+      if target_guid.nil?
+        release_ptr(tlib_ptr)
+        return [nil, nil]
+      end
 
       found_ti_ptr = nil
       found_attr_ptr = nil
@@ -263,7 +279,10 @@ class WIN32OLE
           ref_guid = ref_attr_ptr && type_guid(ref_attr_ptr)
           TI.release_type_attr_fn(ref_ti_ptr).call(ref_ti_ptr, ref_attr_ptr) if ref_attr_ptr
           release_ptr(ref_ti_ptr)
-          ref_guid == target_guid
+          # A candidate whose own TYPEATTR fetch failed has no GUID to
+          # compare -- treat it as no match, never as equal to a
+          # likewise-missing target GUID (nil == nil would be a false hit).
+          !ref_guid.nil? && ref_guid == target_guid
         end
 
         if matched
@@ -283,7 +302,7 @@ class WIN32OLE
       return nil if pci2_ptr.nil?
 
       iid_out = ("\x00" * 16).b
-      hr = W.vtable_function(pci2_ptr, 4, [W::DWORD, W::VOIDP], W::LONG).call(
+      hr = W.vtable_function(pci2_ptr, 4, [W::VOIDP, W::DWORD, W::VOIDP], W::LONG).call(
         pci2_ptr, GUIDKIND_DEFAULT_SOURCE_DISP_IID, iid_out
       )
       release_ptr(pci2_ptr)
@@ -297,7 +316,7 @@ class WIN32OLE
       return nil if pci_ptr.nil?
 
       ti_out = ("\x00" * W::PTR_SIZE).b
-      hr = W.vtable_function(pci_ptr, 3, [W::VOIDP], W::LONG).call(pci_ptr, ti_out)
+      hr = W.vtable_function(pci_ptr, 3, [W::VOIDP, W::VOIDP], W::LONG).call(pci_ptr, ti_out)
       release_ptr(pci_ptr)
       return nil if W.failed?(hr)
 
@@ -370,7 +389,9 @@ class WIN32OLE
       end
 
       cp_out = ("\x00" * W::PTR_SIZE).b
-      hr = W.vtable_function(container_ptr, 4, [W::VOIDP, W::VOIDP], W::LONG).call(container_ptr, iid_bytes, cp_out)
+      hr = W.vtable_function(container_ptr, 4, [W::VOIDP, W::VOIDP, W::VOIDP], W::LONG).call(
+        container_ptr, iid_bytes, cp_out
+      )
       release_ptr(container_ptr)
       if W.failed?(hr)
         release_ptr(event_typeinfo_ptr)
@@ -382,7 +403,10 @@ class WIN32OLE
       @sink_closures = closures # keep the trampolines alive; see build_sink's own comment
 
       cookie_out = ("\x00" * 4).b
-      hr = W.vtable_function(connection_point_ptr, 5, [W::VOIDP, W::DWORD], W::LONG).call(
+      # cookie_out is a DWORD* OUT-parameter (a Ruby byte buffer), so its
+      # declared type is VOIDP -- the pointer -- not DWORD, the value it
+      # points at.
+      hr = W.vtable_function(connection_point_ptr, 5, [W::VOIDP, W::VOIDP, W::VOIDP], W::LONG).call(
         connection_point_ptr, sink_addr, cookie_out
       )
       if W.failed?(hr)
@@ -394,6 +418,12 @@ class WIN32OLE
         raise WIN32OLE::QueryInterfaceError, W.query_interface_error_message('Advise', W.hr_hex(hr))
       end
 
+      @event_typeinfo_ptr = event_typeinfo_ptr
+      # Keep the source WIN32OLE reachable for as long as this Event is: its
+      # own finalizer would otherwise Release the IDispatch* we are advised
+      # on. A plain Ruby reference, not a duplicate AddRef/Release pair --
+      # the same keep-alive discipline Phase 1 established.
+      @ole = ole
       @finalizer_state = {
         cp_ptr: connection_point_ptr, cookie: cookie_out.unpack1('L'),
         ti_ptr: event_typeinfo_ptr, sink_addr: sink_addr, vtable_addr: vtable_addr
@@ -410,7 +440,7 @@ class WIN32OLE
       proc do
         cp_ptr = state[:cp_ptr]
         if cp_ptr && !cp_ptr.zero?
-          W.vtable_function(cp_ptr, 6, [W::DWORD], W::LONG).call(cp_ptr, state[:cookie])
+          W.vtable_function(cp_ptr, 6, [W::VOIDP, W::DWORD], W::LONG).call(cp_ptr, state[:cookie])
           W.vtable_function(cp_ptr, 2, [W::VOIDP], W::DWORD).call(cp_ptr)
         end
         ti_ptr = state[:ti_ptr]
@@ -440,6 +470,7 @@ class WIN32OLE
     end
 
     SINK_VTBL_SLOTS = 7
+    private_constant :SINK_VTBL_SLOTS
 
     def query_interface_closure(sink_addr, source_iid_bytes, refcount)
       Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, riid_ptr, ppv_ptr|
@@ -452,7 +483,14 @@ class WIN32OLE
           ppv_ptr[0, W::PTR_SIZE] = [0].pack(W::PACK_PTR)
           E_NOINTERFACE
         end
-      rescue StandardError, ScriptError => e
+      # `rescue Exception`, deliberately, at every closure boundary in this
+      # file: the rule is that NO Ruby exception may cross back into the OLE
+      # server's native stack frame, and SystemStackError, NoMemoryError,
+      # Interrupt and SignalException all descend from Exception rather than
+      # StandardError. Letting one of those unwind through a native frame is
+      # undefined behaviour, so this is one of the rare places where the
+      # broad rescue is the correct choice rather than an anti-pattern.
+      rescue Exception => e
         warn_closure_exception('QueryInterface', e)
         E_NOINTERFACE
       end
@@ -490,7 +528,7 @@ class WIN32OLE
         W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP, W::DWORD, W::DWORD, W::VOIDP], W::STDCALL
       ) do |_this, _riid, names_ptr, cnames, _lcid, dispids_ptr|
         TI.get_ids_of_names_fn(event_typeinfo_ptr).call(event_typeinfo_ptr, names_ptr.to_i, cnames, dispids_ptr.to_i)
-      rescue StandardError, ScriptError => e
+      rescue Exception => e
         warn_closure_exception('GetIDsOfNames', e)
         DISP_E_UNKNOWNNAME
       end
@@ -499,19 +537,25 @@ class WIN32OLE
     DISP_E_UNKNOWNNAME = -2147352570
     E_NOINTERFACE = -2147467262
     DISP_E_BADINDEX = -2147352565
+    private_constant :DISP_E_UNKNOWNNAME, :E_NOINTERFACE, :DISP_E_BADINDEX
 
     def warn_closure_exception(where, error)
-      warn "#{error.backtrace&.first}: #{error.message} (#{error.class}) in WIN32OLE::Event sink's #{where}"
+      backtrace = error.backtrace || []
+      warn "#{backtrace.first}: #{error.message} (#{error.class}) in WIN32OLE::Event sink's #{where}"
+      backtrace.drop(1).each { |line| warn "\tfrom #{line}" }
     end
 
-    def invoke_closure(event_typeinfo_ptr)
+    # The event ITypeInfo* this sink resolves names against is read from
+    # @event_typeinfo_ptr (set once by #advise), not captured here -- the
+    # parameter is kept only so build_sink calls every closure builder the
+    # same way.
+    def invoke_closure(_event_typeinfo_ptr)
       Fiddle::Closure::BlockCaller.new(
         W::LONG, [W::VOIDP, W::LONG, W::VOIDP, W::DWORD, W::WORD, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL
       ) do |_this, dispid, _riid, _lcid, _wflags, pdispparams_ptr, pvarresult_ptr, _pexcepinfo_ptr, _puargerr_ptr|
-        @event_typeinfo_ptr = event_typeinfo_ptr
         handle_invoke(dispid, pdispparams_ptr, pvarresult_ptr)
         0 # NOERROR, always -- see Global Constraints: no exception may cross this boundary.
-      rescue StandardError, ScriptError => e
+      rescue Exception => e
         warn_closure_exception('Invoke', e)
         0
       end
@@ -600,14 +644,16 @@ class WIN32OLE
 
       result = begin
         handler_obj.send(mid, *args)
-      rescue StandardError, ScriptError => e
+      rescue Exception => e # see query_interface_closure: still inside the closure's native frame
         warn_closure_exception('an event callback', e)
         nil
       end
 
       if result.is_a?(Hash)
         write_hash_result(result, dispid, cargs, rgvarg_addr)
-        result = result['return'] || result[:return]
+        # key? rather than `||`, so a legitimate {'return' => false} yields
+        # false instead of falling through to the symbol key.
+        result = result.key?('return') ? result['return'] : result[:return]
       elsif with_outargs && outargv.is_a?(Array)
         write_array_outargs(outargv, cargs, rgvarg_addr)
       end

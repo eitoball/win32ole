@@ -12,9 +12,20 @@ class TestEventPrereqs < Test::Unit::TestCase
     assert_raise(NotImplementedError) { WIN32OLE.connect('Scripting.Dictionary', 'remotehost') }
   end
 
+  # The old guard here was `defined?(WIN32OLE) && RUBY_ENGINE == 'jruby'`,
+  # which is tautologically true -- this file's own outer guard already
+  # required win32ole/jruby/win32ole -- so on a machine with no COM at all
+  # the test ERRORED out of Fiddle.dlopen instead of omitting. Probe for the
+  # capability by actually trying, and omit on the two ways it can be
+  # absent: no ole32/oleaut32 DLLs (non-Windows), or no such server
+  # registered.
   def test_const_load_defines_constants_without_redefining_existing_ones
-    omit('requires a live WIN32OLE COM object') unless defined?(WIN32OLE) && RUBY_ENGINE == 'jruby'
-    dict = WIN32OLE.new('Scripting.Dictionary')
+    dict =
+      begin
+        WIN32OLE.new('Scripting.Dictionary')
+      rescue Fiddle::DLError, WIN32OLE::RuntimeError => e
+        omit("requires a live WIN32OLE COM object (#{e.class})")
+      end
     mod = Module.new
     WIN32OLE.const_load(dict, mod)
     # Scripting.Dictionary's typelib (Scripting library) has no constants of

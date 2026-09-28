@@ -262,13 +262,190 @@ class TestEvent < Test::Unit::TestCase
     assert_nil(ev.unadvise)
   end
 
+  # Builds a fake COM object: a malloc'd single-pointer object whose vtable
+  # has `slots` pointer-sized entries, NULL except for the given
+  # index => closure pairs. Returns [object_ptr, vtable_ptr]; the caller owns
+  # (and must free) both, and must keep the closures themselves referenced
+  # for as long as the object is used -- GC'ing a Fiddle::Closure frees its
+  # native trampoline. Same technique as test_win32.rb's
+  # test_query_interface_* fakes, generalised to more than one slot.
+  def build_fake_com_object(slots, closures_by_index)
+    vtable = Fiddle::Pointer.malloc(W::PTR_SIZE * slots)
+    slots.times { |i| vtable[i * W::PTR_SIZE, W::PTR_SIZE] = [0].pack(W::PACK_PTR) }
+    closures_by_index.each do |index, closure|
+      vtable[index * W::PTR_SIZE, W::PTR_SIZE] = [closure.to_i].pack(W::PACK_PTR)
+    end
+    obj = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    obj[0, W::PTR_SIZE] = [vtable.to_i].pack(W::PACK_PTR)
+    [obj, vtable]
+  end
+
+  def counting_release_closure(counter)
+    Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) do |_this|
+      counter[0] += 1
+      0
+    end
+  end
+
+  # #unadvise drains the Windows message queue before tearing the sink down;
+  # user32 is not loadable off Windows, so stub that one call out.
+  def with_stubbed_message_pump
+    original = W.method(:pump_windows_messages)
+    pumped = [0]
+    W.define_singleton_method(:pump_windows_messages) { pumped[0] += 1; nil }
+    yield pumped
+  ensure
+    W.define_singleton_method(:pump_windows_messages, original) if original
+  end
+
+  # Exercises the REAL teardown path (native Unadvise/Release/Fiddle.free)
+  # against fake-but-real-closure-backed vtables, then asserts the second
+  # call is a no-op. The previous version of this test seeded cp_ptr: nil, so
+  # the first call short-circuited at the guard and no native call ever ran.
   def test_unadvise_is_idempotent
-    calls = []
+    unadvise_calls = [0]
+    cp_releases = [0]
+    ti_releases = [0]
+    received_cookies = []
+    unadvise_closure = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::DWORD], W::STDCALL) do |_this, cookie|
+      unadvise_calls[0] += 1
+      received_cookies << cookie
+      0
+    end
+    cp_release = counting_release_closure(cp_releases)
+    ti_release = counting_release_closure(ti_releases)
+
+    cp_obj, cp_vtable = build_fake_com_object(7, 2 => cp_release, 6 => unadvise_closure)
+    ti_obj, ti_vtable = build_fake_com_object(3, 2 => ti_release)
+    sink_buf = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    vtable_buf = Fiddle::Pointer.malloc(W::PTR_SIZE)
+
     ev = WIN32OLE::Event.allocate
-    ev.instance_variable_set(:@finalizer_state, { cp_ptr: nil, cookie: nil, ti_ptr: nil, sink_addr: nil, vtable_addr: nil })
+    ev.instance_variable_set(:@finalizer_state, {
+                               cp_ptr: cp_obj.to_i, cookie: 0x2A, ti_ptr: ti_obj.to_i,
+                               sink_addr: sink_buf.to_i, vtable_addr: vtable_buf.to_i
+                             })
+    ev.instance_variable_set(:@sink_closures, [])
+
+    with_stubbed_message_pump do |pumped|
+      assert_nil(ev.unadvise)
+      assert_nil(ev.unadvise) # must not raise, and must not Unadvise/Release/free twice
+      assert_equal(1, pumped[0])
+    end
+
+    assert_equal(1, unadvise_calls[0])
+    assert_equal([0x2A], received_cookies)
+    assert_equal(1, cp_releases[0])
+    assert_equal(1, ti_releases[0])
+    state = ev.instance_variable_get(:@finalizer_state)
+    assert_nil(state[:cp_ptr])
+    assert_nil(state[:ti_ptr])
+    assert_nil(state[:sink_addr]) # the two malloc'd buffers were freed exactly once
+    assert_nil(state[:vtable_addr])
+  ensure
+    Fiddle.free(cp_vtable.to_i) if cp_vtable
+    Fiddle.free(cp_obj.to_i) if cp_obj
+    Fiddle.free(ti_vtable.to_i) if ti_vtable
+    Fiddle.free(ti_obj.to_i) if ti_obj
+  end
+
+  # The one test that covers EVERY vtable_function call site on the
+  # advise/unadvise path at once: a fake IDispatch whose QueryInterface hands
+  # back a fake IConnectionPointContainer, whose FindConnectionPoint hands
+  # back a fake IConnectionPoint, all backed by real
+  # Fiddle::Closure::BlockCaller trampolines. A wrong arg_types arity on any
+  # of those calls raises ArgumentError before a single byte is exchanged, so
+  # this fails loudly against arity bugs without needing Windows.
+  def test_advise_on_event_unadvise_round_trip_against_fake_com_objects
+    cookie_written = 0xABCD
+    ti_releases = [0]
+    container_releases = [0]
+    cp_releases = [0]
+    qi_iids = []
+    find_cp_iids = []
+    advised_sinks = []
+    unadvise_calls = [0]
+
+    ti_obj, ti_vtable = build_fake_com_object(3, 2 => counting_release_closure(ti_releases))
+
+    unadvise_closure = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::DWORD], W::STDCALL) do |_this, _cookie|
+      unadvise_calls[0] += 1
+      0
+    end
+    advise_closure = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, sink, pcookie|
+      advised_sinks << sink.to_i
+      pcookie[0, 4] = [cookie_written].pack('L')
+      0
+    end
+    cp_obj, cp_vtable = build_fake_com_object(
+      7, 2 => counting_release_closure(cp_releases), 5 => advise_closure, 6 => unadvise_closure
+    )
+
+    find_cp_closure = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, riid, ppcp|
+      find_cp_iids << riid[0, 16]
+      ppcp[0, W::PTR_SIZE] = [cp_obj.to_i].pack(W::PACK_PTR)
+      0
+    end
+    container_obj, container_vtable = build_fake_com_object(
+      5, 2 => counting_release_closure(container_releases), 4 => find_cp_closure
+    )
+
+    qi_closure = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, riid, ppv|
+      iid = riid[0, 16]
+      qi_iids << iid
+      if iid == W::IID_ICONNECTIONPOINTCONTAINER
+        ppv[0, W::PTR_SIZE] = [container_obj.to_i].pack(W::PACK_PTR)
+        0
+      else
+        ppv[0, W::PTR_SIZE] = [0].pack(W::PACK_PTR)
+        E_NOINTERFACE
+      end
+    end
+    dispatch_obj, dispatch_vtable = build_fake_com_object(1, 0 => qi_closure)
+
+    source_iid = ("\x07" * 16).b
+    ole = Object.new
+    ole.define_singleton_method(:dispatch_ptr) { dispatch_obj.to_i }
+
+    ev = WIN32OLE::Event.allocate
+    ev.instance_variable_set(:@events, [])
+    ev.instance_variable_set(:@handler, nil)
+    ev.instance_variable_set(:@finalizer_state, nil)
     ev.instance_variable_set(:@sink_closures, nil)
-    ev.unadvise
-    assert_nil(ev.unadvise) # second call must not raise (e.g. Release on a nil pointer)
+    ev.instance_variable_set(:@event_typeinfo_ptr, nil)
+    ev.instance_variable_set(:@ole, nil)
+    ev.define_singleton_method(:resolve_event_source) { |_ole, _itf| [source_iid, ti_obj.to_i] }
+
+    ev.send(:advise, ole, nil)
+
+    assert_equal([W::IID_ICONNECTIONPOINTCONTAINER], qi_iids)
+    assert_equal([source_iid], find_cp_iids)
+    assert_equal(1, container_releases[0]) # released right after FindConnectionPoint
+    state = ev.instance_variable_get(:@finalizer_state)
+    assert_equal(cp_obj.to_i, state[:cp_ptr])
+    assert_equal(cookie_written, state[:cookie])
+    assert_equal(ti_obj.to_i, state[:ti_ptr])
+    assert_equal([state[:sink_addr]], advised_sinks) # Advise really got our sink
+    assert_equal(7, ev.instance_variable_get(:@sink_closures).size)
+    assert_equal(ti_obj.to_i, ev.instance_variable_get(:@event_typeinfo_ptr))
+    assert_same(ole, ev.instance_variable_get(:@ole)) # keeps the source object alive
+
+    ev.on_event('Foo') { |*| }
+    assert_equal('Foo', ev.instance_variable_get(:@events).first[:name])
+
+    with_stubbed_message_pump do
+      assert_nil(ev.unadvise)
+      assert_nil(ev.unadvise)
+    end
+
+    assert_equal(1, unadvise_calls[0])
+    assert_equal(1, cp_releases[0])
+    assert_equal(1, ti_releases[0])
+    assert_nil(ev.instance_variable_get(:@event_typeinfo_ptr))
+    assert_nil(ev.instance_variable_get(:@sink_closures))
+  ensure
+    [dispatch_vtable, dispatch_obj, container_vtable, container_obj,
+     cp_vtable, cp_obj, ti_vtable, ti_obj].each { |p| Fiddle.free(p.to_i) if p }
   end
 
   def fake_byref_variant(vt, ref_bytesize)

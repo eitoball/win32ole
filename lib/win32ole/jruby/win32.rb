@@ -450,8 +450,12 @@ class WIN32OLE
       @translate_message ||= Fiddle::Function.new(user32['TranslateMessage'], [VOIDP], DWORD, STDCALL)
     end
 
+    # DispatchMessageW returns LRESULT, which is pointer-width (64-bit on
+    # x64), not the 32-bit LONG this file uses for HRESULTs. Declaring it as
+    # VOIDP keeps the return-value width right on both x86 and x64;
+    # pump_windows_messages discards the value either way.
     def dispatch_message
-      @dispatch_message ||= Fiddle::Function.new(user32['DispatchMessageW'], [VOIDP], LONG, STDCALL)
+      @dispatch_message ||= Fiddle::Function.new(user32['DispatchMessageW'], [VOIDP], VOIDP, STDCALL)
     end
 
     def pump_windows_messages

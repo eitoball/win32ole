@@ -42,7 +42,23 @@ class WIN32OLE
         raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{hresult_detail(hr)}"
       end
 
-      wrap_dispatch_pointer(ppv.unpack1(W::PACK_PTR))
+      # GetActiveObject's out-parameter is IUnknown**, not IDispatch** --
+      # ext/win32ole/win32ole.c:1948-1957 QueryInterfaces for IID_IDispatch
+      # and releases the original IUnknown* before wrapping the result.
+      iunknown_ptr = ppv.unpack1(W::PACK_PTR)
+      idispatch_ptr = W.query_interface(iunknown_ptr, W::IID_IDISPATCH)
+      release_com_pointer(iunknown_ptr)
+      if idispatch_ptr.nil?
+        raise WIN32OLE::RuntimeError, W.unknown_server_error_message(server)
+      end
+
+      wrap_dispatch_pointer(idispatch_ptr)
+    end
+
+    def release_com_pointer(ptr)
+      return if ptr.nil? || ptr.zero?
+
+      W.vtable_function(ptr, 2, [W::VOIDP], W::DWORD).call(ptr)
     end
 
     def ruby_value_to_variant_bytes(value, bstrs_to_free)
@@ -147,7 +163,7 @@ class WIN32OLE
       nil
     end
 
-    private :resolve_clsid, :hresult_detail
+    private :resolve_clsid, :hresult_detail, :release_com_pointer
   end
 
   def initialize(server, host = nil)
