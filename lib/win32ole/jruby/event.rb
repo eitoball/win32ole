@@ -23,12 +23,53 @@ class WIN32OLE
       W.pump_windows_messages
     end
 
+    def on_event(event = nil, &block)
+      register_event(event, block, false)
+    end
+
+    def on_event_with_outargs(event = nil, &block)
+      register_event(event, block, true)
+    end
+
+    def off_event(event = nil)
+      name = event.nil? ? nil : normalize_event_name(event)
+      @events.reject! { |e| e[:name] == name }
+      nil
+    end
+
+    def handler=(obj)
+      @handler = obj
+    end
+
+    def handler
+      @handler
+    end
+
     private
 
     # Built up across Tasks 9-13; a successful construction isn't
     # exercised by any test until Task 13 wires the real implementation in.
     def advise(ole, itf)
       raise NotImplementedError, 'advise is implemented in Task 13'
+    end
+
+    def register_event(event, block, with_outargs)
+      if @finalizer_state.nil?
+        raise WIN32OLE::RuntimeError, 'IConnectionPoint not found. You must call advise at first.'
+      end
+
+      name = event.nil? ? nil : normalize_event_name(event)
+      @events.reject! { |e| e[:name] == name }
+      @events << { name: name, proc: block, with_outargs: with_outargs }
+      nil
+    end
+
+    def normalize_event_name(event)
+      unless event.is_a?(String) || event.is_a?(Symbol)
+        raise TypeError, 'wrong argument type (expected String or Symbol)'
+      end
+
+      event.to_s
     end
   end
 end
