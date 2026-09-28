@@ -45,6 +45,25 @@ class WIN32OLE
       @handler
     end
 
+    def unadvise
+      return nil if @finalizer_state.nil? || @finalizer_state[:cp_ptr].nil?
+
+      cp_ptr = @finalizer_state[:cp_ptr]
+      W.vtable_function(cp_ptr, 6, [W::DWORD], W::LONG).call(cp_ptr, @finalizer_state[:cookie])
+      W.vtable_function(cp_ptr, 2, [W::VOIDP], W::DWORD).call(cp_ptr)
+      ti_ptr = @finalizer_state[:ti_ptr]
+      W.vtable_function(ti_ptr, 2, [W::VOIDP], W::DWORD).call(ti_ptr) if ti_ptr && !ti_ptr.zero?
+      Fiddle.free(@finalizer_state[:sink_addr]) if @finalizer_state[:sink_addr]
+      Fiddle.free(@finalizer_state[:vtable_addr]) if @finalizer_state[:vtable_addr]
+
+      @finalizer_state[:cp_ptr] = nil
+      @finalizer_state[:ti_ptr] = nil
+      @finalizer_state[:sink_addr] = nil
+      @finalizer_state[:vtable_addr] = nil
+      @sink_closures = nil
+      nil
+    end
+
     private
 
     TKIND_COCLASS = 5
@@ -339,14 +358,70 @@ class WIN32OLE
       find_default_source(ole)
     end
 
-    # Built up across Tasks 9-13; a successful construction isn't
-    # exercised by any test until Task 13 wires the real implementation in.
+    # ext/win32ole/win32ole_event.c:900-973 (ev_advise)
     def advise(ole, itf)
-      raise NotImplementedError, 'advise is implemented in Task 13'
+      iid_bytes, event_typeinfo_ptr = resolve_event_source(ole, itf)
+
+      idispatch_ptr = ole.dispatch_ptr
+      container_ptr = W.query_interface(idispatch_ptr, W::IID_ICONNECTIONPOINTCONTAINER)
+      if container_ptr.nil?
+        release_ptr(event_typeinfo_ptr)
+        raise WIN32OLE::QueryInterfaceError, W.query_interface_error_message('query IConnectionPointContainer', 'E_NOINTERFACE')
+      end
+
+      cp_out = ("\x00" * W::PTR_SIZE).b
+      hr = W.vtable_function(container_ptr, 4, [W::VOIDP, W::VOIDP], W::LONG).call(container_ptr, iid_bytes, cp_out)
+      release_ptr(container_ptr)
+      if W.failed?(hr)
+        release_ptr(event_typeinfo_ptr)
+        raise WIN32OLE::QueryInterfaceError, W.query_interface_error_message('query IConnectionPoint', W.hr_hex(hr))
+      end
+      connection_point_ptr = cp_out.unpack1(W::PACK_PTR)
+
+      sink_addr, vtable_addr, closures = build_sink(iid_bytes, event_typeinfo_ptr)
+      @sink_closures = closures # keep the trampolines alive; see build_sink's own comment
+
+      cookie_out = ("\x00" * 4).b
+      hr = W.vtable_function(connection_point_ptr, 5, [W::VOIDP, W::DWORD], W::LONG).call(
+        connection_point_ptr, sink_addr, cookie_out
+      )
+      if W.failed?(hr)
+        release_ptr(connection_point_ptr)
+        release_ptr(event_typeinfo_ptr)
+        Fiddle.free(sink_addr)
+        Fiddle.free(vtable_addr)
+        @sink_closures = nil
+        raise WIN32OLE::QueryInterfaceError, W.query_interface_error_message('Advise', W.hr_hex(hr))
+      end
+
+      @finalizer_state = {
+        cp_ptr: connection_point_ptr, cookie: cookie_out.unpack1('L'),
+        ti_ptr: event_typeinfo_ptr, sink_addr: sink_addr, vtable_addr: vtable_addr
+      }
+      ObjectSpace.define_finalizer(self, self.class.finalizer(@finalizer_state))
+    end
+
+    # Mirrors variant.rb:282-300's discipline exactly: the finalizer proc
+    # captures ONLY this plain data hash, never self and never the live
+    # Fiddle::Closure objects (@sink_closures) -- capturing either would
+    # create a reference cycle that prevents GC from ever running the
+    # finalizer at all.
+    def self.finalizer(state)
+      proc do
+        cp_ptr = state[:cp_ptr]
+        if cp_ptr && !cp_ptr.zero?
+          W.vtable_function(cp_ptr, 6, [W::DWORD], W::LONG).call(cp_ptr, state[:cookie])
+          W.vtable_function(cp_ptr, 2, [W::VOIDP], W::DWORD).call(cp_ptr)
+        end
+        ti_ptr = state[:ti_ptr]
+        W.vtable_function(ti_ptr, 2, [W::VOIDP], W::DWORD).call(ti_ptr) if ti_ptr && !ti_ptr.zero?
+        Fiddle.free(state[:sink_addr]) if state[:sink_addr]
+        Fiddle.free(state[:vtable_addr]) if state[:vtable_addr]
+      end
     end
 
     def register_event(event, block, with_outargs)
-      if @finalizer_state.nil?
+      if @finalizer_state.nil? || @finalizer_state[:cp_ptr].nil?
         raise WIN32OLE::RuntimeError, 'IConnectionPoint not found. You must call advise at first.'
       end
 

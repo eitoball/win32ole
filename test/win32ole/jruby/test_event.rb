@@ -256,6 +256,21 @@ class TestEvent < Test::Unit::TestCase
     assert_match(/boom/, err)
   end
 
+  def test_unadvise_on_a_never_advised_event_is_a_safe_noop
+    ev = WIN32OLE::Event.allocate
+    ev.instance_variable_set(:@finalizer_state, nil)
+    assert_nil(ev.unadvise)
+  end
+
+  def test_unadvise_is_idempotent
+    calls = []
+    ev = WIN32OLE::Event.allocate
+    ev.instance_variable_set(:@finalizer_state, { cp_ptr: nil, cookie: nil, ti_ptr: nil, sink_addr: nil, vtable_addr: nil })
+    ev.instance_variable_set(:@sink_closures, nil)
+    ev.unadvise
+    assert_nil(ev.unadvise) # second call must not raise (e.g. Release on a nil pointer)
+  end
+
   def capture_stderr
     old = $stderr
     $stderr = StringIO.new
