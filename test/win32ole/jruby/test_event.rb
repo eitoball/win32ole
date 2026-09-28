@@ -366,7 +366,14 @@ class TestEvent < Test::Unit::TestCase
     advised_sinks = []
     unadvise_calls = [0]
 
-    ti_obj, ti_vtable = build_fake_com_object(3, 2 => counting_release_closure(ti_releases))
+    # Every closure below is bound to a local that stays in scope for the
+    # whole test: once its address is written into a malloc'd vtable slot, the
+    # GC can no longer see that raw Integer as a reference, so an
+    # inline-only closure can be collected -- freeing its native trampoline
+    # -- while the test still expects to call through the slot. See
+    # build_fake_com_object's own contract.
+    ti_release = counting_release_closure(ti_releases)
+    ti_obj, ti_vtable = build_fake_com_object(3, 2 => ti_release)
 
     unadvise_closure = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::DWORD], W::STDCALL) do |_this, _cookie|
       unadvise_calls[0] += 1
@@ -377,8 +384,9 @@ class TestEvent < Test::Unit::TestCase
       pcookie[0, 4] = [cookie_written].pack('L')
       0
     end
+    cp_release = counting_release_closure(cp_releases)
     cp_obj, cp_vtable = build_fake_com_object(
-      7, 2 => counting_release_closure(cp_releases), 5 => advise_closure, 6 => unadvise_closure
+      7, 2 => cp_release, 5 => advise_closure, 6 => unadvise_closure
     )
 
     find_cp_closure = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, riid, ppcp|
@@ -386,8 +394,9 @@ class TestEvent < Test::Unit::TestCase
       ppcp[0, W::PTR_SIZE] = [cp_obj.to_i].pack(W::PACK_PTR)
       0
     end
+    container_release = counting_release_closure(container_releases)
     container_obj, container_vtable = build_fake_com_object(
-      5, 2 => counting_release_closure(container_releases), 4 => find_cp_closure
+      5, 2 => container_release, 4 => find_cp_closure
     )
 
     qi_closure = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, riid, ppv|
@@ -402,6 +411,14 @@ class TestEvent < Test::Unit::TestCase
       end
     end
     dispatch_obj, dispatch_vtable = build_fake_com_object(1, 0 => qi_closure)
+
+    # Regression guard for the closure-liveness contract above: if any of the
+    # closures wired into the vtables were only reachable through their raw
+    # address in malloc'd memory, this collects them and the first call
+    # through that slot segfaults the process rather than failing an
+    # assertion. Cheap, and it fails loudly the moment someone inlines a
+    # closure back into build_fake_com_object.
+    GC.start
 
     source_iid = ("\x07" * 16).b
     ole = Object.new
@@ -433,6 +450,7 @@ class TestEvent < Test::Unit::TestCase
     ev.on_event('Foo') { |*| }
     assert_equal('Foo', ev.instance_variable_get(:@events).first[:name])
 
+    GC.start # again right before the teardown calls -- the exact crash path
     with_stubbed_message_pump do
       assert_nil(ev.unadvise)
       assert_nil(ev.unadvise)
