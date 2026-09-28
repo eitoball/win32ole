@@ -176,6 +176,169 @@ class WIN32OLE
       ti_out.unpack1(W::PACK_PTR)
     end
 
+    IMPLTYPEFLAG_FDEFAULT = 0x1
+    IMPLTYPEFLAG_FSOURCE = 0x2
+    GUIDKIND_DEFAULT_SOURCE_DISP_IID = 1
+
+    def impl_type_flags(itypeinfo_ptr, index)
+      flags_out = ("\x00" * 4).b
+      hr = TI.impl_type_flags_fn(itypeinfo_ptr).call(itypeinfo_ptr, index, flags_out)
+      return nil if W.failed?(hr)
+
+      flags_out.unpack1('l')
+    end
+
+    # ext/win32ole/win32ole_event.c:667-701
+    def find_default_source_from_typeinfo(ti_ptr, attr_ptr)
+      count = TI::TYPEATTR.new(attr_ptr).cImplTypes
+      count.times do |i|
+        flags = impl_type_flags(ti_ptr, i)
+        next if flags.nil?
+        next if (flags & IMPLTYPEFLAG_FDEFAULT).zero? || (flags & IMPLTYPEFLAG_FSOURCE).zero?
+
+        ref_ti_ptr = impl_type_ref_typeinfo(ti_ptr, i)
+        return ref_ti_ptr if ref_ti_ptr
+      end
+      nil
+    end
+
+    # ext/win32ole/win32ole_event.c:592-665: find, in ti_ptr's containing
+    # typelib, the COCLASS whose default impl type is ti_ptr itself.
+    def find_coclass(ti_ptr)
+      tlib_ptr = containing_typelib(ti_ptr)
+      return [nil, nil] if tlib_ptr.nil?
+
+      target_attr_ptr = type_attr_ptr(ti_ptr)
+      target_guid = target_attr_ptr && type_guid(target_attr_ptr)
+      TI.release_type_attr_fn(ti_ptr).call(ti_ptr, target_attr_ptr) if target_attr_ptr
+
+      found_ti_ptr = nil
+      found_attr_ptr = nil
+      count = TI.type_info_count_fn(tlib_ptr).call(tlib_ptr)
+      count.times do |i|
+        break if found_ti_ptr
+
+        ti2_out = ("\x00" * W::PTR_SIZE).b
+        next if W.failed?(TI.type_info_fn(tlib_ptr).call(tlib_ptr, i, ti2_out))
+
+        ti2_ptr = ti2_out.unpack1(W::PACK_PTR)
+        attr2_ptr = type_attr_ptr(ti2_ptr)
+        if attr2_ptr.nil?
+          release_ptr(ti2_ptr)
+          next
+        end
+        if TI::TYPEATTR.new(attr2_ptr).typekind != TKIND_COCLASS
+          TI.release_type_attr_fn(ti2_ptr).call(ti2_ptr, attr2_ptr)
+          release_ptr(ti2_ptr)
+          next
+        end
+
+        matched = TI::TYPEATTR.new(attr2_ptr).cImplTypes.times.any? do |j|
+          flags = impl_type_flags(ti2_ptr, j)
+          next false if flags.nil? || (flags & IMPLTYPEFLAG_FDEFAULT).zero?
+
+          ref_ti_ptr = impl_type_ref_typeinfo(ti2_ptr, j)
+          next false if ref_ti_ptr.nil?
+
+          ref_attr_ptr = type_attr_ptr(ref_ti_ptr)
+          ref_guid = ref_attr_ptr && type_guid(ref_attr_ptr)
+          TI.release_type_attr_fn(ref_ti_ptr).call(ref_ti_ptr, ref_attr_ptr) if ref_attr_ptr
+          release_ptr(ref_ti_ptr)
+          ref_guid == target_guid
+        end
+
+        if matched
+          found_ti_ptr = ti2_ptr
+          found_attr_ptr = attr2_ptr
+        else
+          TI.release_type_attr_fn(ti2_ptr).call(ti2_ptr, attr2_ptr)
+          release_ptr(ti2_ptr)
+        end
+      end
+      release_ptr(tlib_ptr)
+      [found_ti_ptr, found_attr_ptr]
+    end
+
+    def provide_class_info2_iid(idispatch_ptr)
+      pci2_ptr = W.query_interface(idispatch_ptr, W::IID_IPROVIDECLASSINFO2)
+      return nil if pci2_ptr.nil?
+
+      iid_out = ("\x00" * 16).b
+      hr = W.vtable_function(pci2_ptr, 4, [W::DWORD, W::VOIDP], W::LONG).call(
+        pci2_ptr, GUIDKIND_DEFAULT_SOURCE_DISP_IID, iid_out
+      )
+      release_ptr(pci2_ptr)
+      return nil if W.failed?(hr)
+
+      iid_out
+    end
+
+    def provide_class_info_typeinfo(idispatch_ptr)
+      pci_ptr = W.query_interface(idispatch_ptr, W::IID_IPROVIDECLASSINFO)
+      return nil if pci_ptr.nil?
+
+      ti_out = ("\x00" * W::PTR_SIZE).b
+      hr = W.vtable_function(pci_ptr, 3, [W::VOIDP], W::LONG).call(pci_ptr, ti_out)
+      release_ptr(pci_ptr)
+      return nil if W.failed?(hr)
+
+      ti_out.unpack1(W::PACK_PTR)
+    end
+
+    # ext/win32ole/win32ole_event.c:703-786, minus the GetGUID/find_iid
+    # fast path (handled by resolve_event_source below, since it needs an
+    # `iid_bytes` result rather than an `itypeinfo_ptr` result).
+    def find_default_source(ole)
+      itypeinfo_ptr = provide_class_info_typeinfo(ole.dispatch_ptr) || get_type_info0(ole.dispatch_ptr)
+      raise WIN32OLE::RuntimeError, 'interface not found' if itypeinfo_ptr.nil?
+
+      attr_ptr = type_attr_ptr(itypeinfo_ptr)
+      if attr_ptr.nil?
+        release_ptr(itypeinfo_ptr)
+        raise WIN32OLE::RuntimeError, 'interface not found'
+      end
+
+      result_ti_ptr = find_default_source_from_typeinfo(itypeinfo_ptr, attr_ptr)
+      if result_ti_ptr.nil?
+        co_ti_ptr, co_attr_ptr = find_coclass(itypeinfo_ptr)
+        if co_ti_ptr
+          result_ti_ptr = find_default_source_from_typeinfo(co_ti_ptr, co_attr_ptr)
+          TI.release_type_attr_fn(co_ti_ptr).call(co_ti_ptr, co_attr_ptr)
+          release_ptr(co_ti_ptr)
+        end
+      end
+      TI.release_type_attr_fn(itypeinfo_ptr).call(itypeinfo_ptr, attr_ptr)
+      release_ptr(itypeinfo_ptr)
+      raise WIN32OLE::RuntimeError, 'interface not found' if result_ti_ptr.nil?
+
+      result_attr_ptr = type_attr_ptr(result_ti_ptr)
+      if result_attr_ptr.nil?
+        release_ptr(result_ti_ptr)
+        raise WIN32OLE::RuntimeError, 'interface not found'
+      end
+      guid = type_guid(result_attr_ptr)
+      TI.release_type_attr_fn(result_ti_ptr).call(result_ti_ptr, result_attr_ptr)
+      [guid, result_ti_ptr]
+    end
+
+    # The single entry point #advise (Task 13) calls.
+    def resolve_event_source(ole, itf)
+      return find_iid_by_name(ole, itf) if itf
+
+      iid_bytes = provide_class_info2_iid(ole.dispatch_ptr)
+      if iid_bytes
+        begin
+          return [iid_bytes, find_iid_by_guid(ole, iid_bytes)]
+        rescue WIN32OLE::RuntimeError
+          # IProvideClassInfo2 succeeded but the IID it named isn't
+          # resolvable in this typelib -- fall through to the
+          # IProvideClassInfo/ImplType-traversal path below, matching
+          # win32ole_event.c:730-736's own fallthrough.
+        end
+      end
+      find_default_source(ole)
+    end
+
     # Built up across Tasks 9-13; a successful construction isn't
     # exercised by any test until Task 13 wires the real implementation in.
     def advise(ole, itf)

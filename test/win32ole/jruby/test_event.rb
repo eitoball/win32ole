@@ -119,5 +119,9 @@ class TestEvent < Test::Unit::TestCase
   def test_find_iid_by_guid_is_private
     assert(WIN32OLE::Event.private_method_defined?(:find_iid_by_guid))
   end
+
+  def test_resolve_event_source_is_private
+    assert(WIN32OLE::Event.private_method_defined?(:resolve_event_source))
+  end
 end
 end
