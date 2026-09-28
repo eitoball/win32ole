@@ -271,6 +271,75 @@ class TestEvent < Test::Unit::TestCase
     assert_nil(ev.unadvise) # second call must not raise (e.g. Release on a nil pointer)
   end
 
+  def fake_byref_variant(vt, ref_bytesize)
+    ref_buf = Fiddle::Pointer.malloc(ref_bytesize)
+    var = W.pack_variant(vt | W::VT_BYREF, W.pack_pointer(ref_buf.to_i))
+    var_ptr = Fiddle::Pointer.to_ptr(var)
+    [var_ptr, ref_buf]
+  end
+
+  def test_write_byref_variant_writes_a_bool
+    ev = WIN32OLE::Event.allocate
+    var_ptr, ref_buf = fake_byref_variant(W::VT_BOOL, 2)
+    ev.send(:write_byref_variant, var_ptr, true)
+    assert_equal(-1, ref_buf[0, 2].unpack1('s'))
+  ensure
+    Fiddle.free(ref_buf.to_i) if ref_buf
+  end
+
+  def test_write_byref_variant_writes_an_i4
+    ev = WIN32OLE::Event.allocate
+    var_ptr, ref_buf = fake_byref_variant(W::VT_I4, 4)
+    ev.send(:write_byref_variant, var_ptr, 42)
+    assert_equal(42, ref_buf[0, 4].unpack1('l'))
+  ensure
+    Fiddle.free(ref_buf.to_i) if ref_buf
+  end
+
+  def test_write_byref_variant_writes_an_r8
+    ev = WIN32OLE::Event.allocate
+    var_ptr, ref_buf = fake_byref_variant(W::VT_R8, 8)
+    ev.send(:write_byref_variant, var_ptr, 1.5)
+    assert_in_delta(1.5, ref_buf[0, 8].unpack1('d'), 0.0001)
+  ensure
+    Fiddle.free(ref_buf.to_i) if ref_buf
+  end
+
+  def test_write_byref_variant_ignores_a_non_byref_variant
+    ev = WIN32OLE::Event.allocate
+    var = W.pack_variant(W::VT_I4, W.pack_i4(0))
+    var_ptr = Fiddle::Pointer.to_ptr(var)
+    assert_nil(ev.send(:write_byref_variant, var_ptr, 99)) # must not raise / must not dereference garbage
+  end
+
+  def test_write_byref_variant_ignores_a_type_mismatched_value
+    ev = WIN32OLE::Event.allocate
+    var_ptr, ref_buf = fake_byref_variant(W::VT_I4, 4)
+    ref_buf[0, 4] = [7].pack('l')
+    ev.send(:write_byref_variant, var_ptr, [1, 2, 3]) # Array has no matching case -- silent no-op, matches C
+    assert_equal(7, ref_buf[0, 4].unpack1('l'))
+  ensure
+    Fiddle.free(ref_buf.to_i) if ref_buf
+  end
+
+  def test_write_array_outargs_writes_positionally_and_stops_at_cargs
+    ev = WIN32OLE::Event.allocate
+    rgvarg = Fiddle::Pointer.malloc(W::VARIANT_SIZE * 2)
+    ref0 = Fiddle::Pointer.malloc(4)
+    ref1 = Fiddle::Pointer.malloc(4)
+    rgvarg[1 * W::VARIANT_SIZE, W::VARIANT_SIZE] = W.pack_variant(W::VT_I4 | W::VT_BYREF, W.pack_pointer(ref0.to_i)) # arg 0
+    rgvarg[0 * W::VARIANT_SIZE, W::VARIANT_SIZE] = W.pack_variant(W::VT_I4 | W::VT_BYREF, W.pack_pointer(ref1.to_i)) # arg 1
+
+    ev.send(:write_array_outargs, [11, 22], 2, rgvarg.to_i)
+
+    assert_equal(11, ref0[0, 4].unpack1('l'))
+    assert_equal(22, ref1[0, 4].unpack1('l'))
+  ensure
+    Fiddle.free(rgvarg.to_i) if rgvarg
+    Fiddle.free(ref0.to_i) if ref0
+    Fiddle.free(ref1.to_i) if ref1
+  end
+
   def capture_stderr
     old = $stderr
     $stderr = StringIO.new

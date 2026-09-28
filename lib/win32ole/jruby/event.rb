@@ -605,6 +605,13 @@ class WIN32OLE
         nil
       end
 
+      if result.is_a?(Hash)
+        write_hash_result(result, dispid, cargs, rgvarg_addr)
+        result = result['return'] || result[:return]
+      elsif with_outargs && outargv.is_a?(Array)
+        write_array_outargs(outargv, cargs, rgvarg_addr)
+      end
+
       return if pvarresult_ptr.nil? || pvarresult_ptr.to_i.zero?
 
       bytes = begin
@@ -613,6 +620,76 @@ class WIN32OLE
         W.pack_variant(W::VT_EMPTY, W.pack_empty)
       end
       pvarresult_ptr[0, W::VARIANT_SIZE] = bytes
+    end
+
+    # ext/win32ole/win32ole_event.c:333-399 (ole_val2ptr_variant), ported
+    # 1:1 including its "silently do nothing for an unhandled
+    # type/VARTYPE combination" fallthrough -- e.g. writing a String into a
+    # VT_I4|BYREF slot is a deliberate no-op in the original, not a bug we
+    # should "fix" by raising.
+    def write_byref_variant(var_ptr, value)
+      vt = var_ptr[0, 2].unpack1('S')
+      return if (vt & W::VT_BYREF).zero?
+
+      ref_addr = var_ptr[8, W::PTR_SIZE].unpack1(W::PACK_PTR)
+      return if ref_addr.zero?
+
+      ref_ptr = Fiddle::Pointer.new(ref_addr)
+      base_vt = vt & ~W::VT_BYREF
+      case value
+      when String
+        ref_ptr[0, W::PTR_SIZE] = [W.sys_alloc_string.call(W.wstr(value))].pack(W::PACK_PTR) if base_vt == W::VT_BSTR
+      when Integer
+        case base_vt
+        when W::VT_UI1 then ref_ptr[0, 1] = [value].pack('C')
+        when W::VT_I2 then ref_ptr[0, 2] = [value].pack('s')
+        when W::VT_I4 then ref_ptr[0, 4] = [value].pack('l')
+        when W::VT_R4 then ref_ptr[0, 4] = [value.to_f].pack('f')
+        when W::VT_R8 then ref_ptr[0, 8] = [value.to_f].pack('d')
+        end
+      when Float
+        case base_vt
+        when W::VT_I2 then ref_ptr[0, 2] = [value.to_i].pack('s')
+        when W::VT_I4 then ref_ptr[0, 4] = [value.to_i].pack('l')
+        when W::VT_R4 then ref_ptr[0, 4] = [value].pack('f')
+        when W::VT_R8 then ref_ptr[0, 8] = [value].pack('d')
+        end
+      when true, false
+        ref_ptr[0, 2] = [value ? -1 : 0].pack('s') if base_vt == W::VT_BOOL
+      end
+    end
+
+    def write_array_outargs(ary, cargs, rgvarg_addr)
+      ary.each_with_index do |value, i|
+        break if i >= cargs
+
+        var_ptr = Fiddle::Pointer.new(rgvarg_addr + (cargs - i - 1) * W::VARIANT_SIZE)
+        write_byref_variant(var_ptr, value)
+      end
+    end
+
+    # ext/win32ole/win32ole_event.c:401-428 (hash2ptr_dispparams)
+    def write_hash_result(hash, dispid, cargs, rgvarg_addr)
+      names_out = Fiddle::Pointer.malloc(W::PTR_SIZE * (cargs + 1))
+      count_out = ("\x00" * 4).b
+      hr = TI.get_names_fn(@event_typeinfo_ptr).call(@event_typeinfo_ptr, dispid, names_out, cargs + 1, count_out)
+      return if W.failed?(hr)
+
+      len = count_out.unpack1('L')
+      (len - 1).times do |i|
+        bstr = names_out[(i + 1) * W::PTR_SIZE, W::PTR_SIZE].unpack1(W::PACK_PTR)
+        key_name = W.bstr_to_s(bstr)
+        W.sys_free_string.call(bstr) unless bstr.zero?
+
+        value = hash[i]
+        value = hash[key_name] if value.nil?
+        value = hash[key_name.to_sym] if value.nil? && key_name
+
+        var_ptr = Fiddle::Pointer.new(rgvarg_addr + (cargs - i - 1) * W::VARIANT_SIZE)
+        write_byref_variant(var_ptr, value)
+      end
+    ensure
+      Fiddle.free(names_out.to_i) if names_out
     end
 
     # Builds a fresh 7-slot IDispatch-shaped vtable (QueryInterface, AddRef,
