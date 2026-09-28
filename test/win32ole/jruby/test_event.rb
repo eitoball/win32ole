@@ -1,6 +1,7 @@
 require 'test/unit'
 
 if RUBY_ENGINE == 'jruby'
+require 'stringio'
 require 'win32ole/jruby/event'
 
 class TestEvent < Test::Unit::TestCase
@@ -212,6 +213,56 @@ class TestEvent < Test::Unit::TestCase
 
   def test_resolve_event_source_is_private
     assert(WIN32OLE::Event.private_method_defined?(:resolve_event_source))
+  end
+
+  def test_find_event_entry_prefers_a_named_match_over_the_catch_all
+    ev = WIN32OLE::Event.allocate
+    fallback = { name: nil, proc: proc { :fallback }, with_outargs: false }
+    named = { name: 'Foo', proc: proc { :named }, with_outargs: false }
+    ev.instance_variable_set(:@events, [fallback, named])
+    entry, is_default = ev.send(:find_event_entry, 'Foo')
+    assert_same(named, entry)
+    assert_equal(false, is_default)
+  end
+
+  def test_find_event_entry_falls_back_to_the_catch_all
+    ev = WIN32OLE::Event.allocate
+    fallback = { name: nil, proc: proc { :fallback }, with_outargs: false }
+    ev.instance_variable_set(:@events, [fallback])
+    entry, is_default = ev.send(:find_event_entry, 'Bar')
+    assert_same(fallback, entry)
+    assert_equal(true, is_default)
+  end
+
+  def test_find_event_entry_returns_nil_when_nothing_matches
+    ev = WIN32OLE::Event.allocate
+    ev.instance_variable_set(:@events, [])
+    entry, is_default = ev.send(:find_event_entry, 'Bar')
+    assert_nil(entry)
+    assert_equal(false, is_default)
+  end
+
+  def test_handle_invoke_writes_exception_message_to_stderr_and_does_not_raise
+    ev = WIN32OLE::Event.allocate
+    ev.instance_variable_set(:@events, [{ name: nil, proc: proc { raise 'boom' }, with_outargs: false }])
+    ev.instance_variable_set(:@handler, nil)
+    ev.instance_variable_set(:@event_typeinfo_ptr, 0)
+    ev.define_singleton_method(:resolve_event_name) { |_dispid| 'Whatever' }
+
+    dispparams = [0, 0, 0, 0].pack("#{W::PACK_PTR}#{W::PACK_PTR}LL")
+    dispparams_ptr = Fiddle::Pointer.to_ptr(dispparams)
+
+    err = capture_stderr { ev.send(:handle_invoke, 1, dispparams_ptr, nil) }
+    assert_match(/boom/, err)
+  end
+
+  def capture_stderr
+    old = $stderr
+    $stderr = StringIO.new
+    yield
+    $stderr.string
+  ensure
+    $stderr = old
   end
 end
 end

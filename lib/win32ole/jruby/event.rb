@@ -429,10 +429,115 @@ class WIN32OLE
       warn "#{error.backtrace&.first}: #{error.message} (#{error.class}) in WIN32OLE::Event sink's #{where}"
     end
 
-    def invoke_closure(_event_typeinfo_ptr)
+    def invoke_closure(event_typeinfo_ptr)
       Fiddle::Closure::BlockCaller.new(
         W::LONG, [W::VOIDP, W::LONG, W::VOIDP, W::DWORD, W::WORD, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL
-      ) { |*| 0 } # NOERROR; replaced with real dispatch in Task 12
+      ) do |_this, dispid, _riid, _lcid, _wflags, pdispparams_ptr, pvarresult_ptr, _pexcepinfo_ptr, _puargerr_ptr|
+        @event_typeinfo_ptr = event_typeinfo_ptr
+        handle_invoke(dispid, pdispparams_ptr, pvarresult_ptr)
+        0 # NOERROR, always -- see Global Constraints: no exception may cross this boundary.
+      rescue StandardError, ScriptError => e
+        warn_closure_exception('Invoke', e)
+        0
+      end
+    end
+
+    def resolve_event_name(dispid)
+      bstr_out = ("\x00" * W::PTR_SIZE).b
+      count_out = ("\x00" * 4).b
+      hr = TI.get_names_fn(@event_typeinfo_ptr).call(@event_typeinfo_ptr, dispid, bstr_out, 1, count_out)
+      return nil if W.failed?(hr)
+
+      bstr = bstr_out.unpack1(W::PACK_PTR)
+      name = W.bstr_to_s(bstr)
+      W.sys_free_string.call(bstr) unless bstr.zero?
+      name
+    end
+
+    # ext/win32ole/win32ole_event.c:813-836 (ole_search_event): a NAMED
+    # match wins immediately; otherwise fall back to the one catch-all
+    # (nil-name) entry, if any. Returns [entry_or_nil, is_default] --
+    # is_default is true only when a catch-all entry was actually found
+    # (matching the C source, which leaves *is_default FALSE when the
+    # array has no catch-all at all -- drives whether the event name gets
+    # prepended to the callback's args).
+    def find_event_entry(name)
+      fallback = nil
+      is_default = false
+      @events.each do |e|
+        return [e, false] if e[:name] == name
+
+        if e[:name].nil?
+          fallback = e
+          is_default = true
+        end
+      end
+      [fallback, is_default]
+    end
+
+    def read_dispparams(pdispparams_ptr)
+      rgvarg_addr = pdispparams_ptr[0, W::PTR_SIZE].unpack1(W::PACK_PTR)
+      cargs = pdispparams_ptr[2 * W::PTR_SIZE, 4].unpack1('L')
+      [cargs, rgvarg_addr]
+    end
+
+    # ext/win32ole/win32ole_event.c:132-234 (EVENTSINK_Invoke), the
+    # non-hash/non-outargs subset -- Task 14 adds the Hash/Array
+    # out-argument write-back on top of this.
+    def handle_invoke(dispid, pdispparams_ptr, pvarresult_ptr)
+      name = resolve_event_name(dispid)
+      return if name.nil?
+
+      entry, is_default = find_event_entry(name)
+      handler_obj = nil
+      mid = nil
+      with_outargs = false
+      if entry
+        handler_obj = entry[:proc]
+        mid = :call
+        with_outargs = entry[:with_outargs]
+      elsif @handler
+        on_name = "on#{name}"
+        if @handler.respond_to?(on_name)
+          handler_obj = @handler
+          mid = on_name
+          is_default = false
+        elsif @handler.respond_to?(:method_missing)
+          handler_obj = @handler
+          mid = :method_missing
+          is_default = true
+        end
+      end
+      return if handler_obj.nil? || mid.nil?
+
+      args = []
+      args << name if is_default
+      cargs, rgvarg_addr = read_dispparams(pdispparams_ptr)
+      cargs.times do |i|
+        var_ptr = Fiddle::Pointer.new(rgvarg_addr + (cargs - i - 1) * W::VARIANT_SIZE)
+        args << WIN32OLE.variant_bytes_to_ruby_value(var_ptr[0, W::VARIANT_SIZE])
+      end
+      outargv = nil
+      if with_outargs
+        outargv = []
+        args << outargv
+      end
+
+      result = begin
+        handler_obj.send(mid, *args)
+      rescue StandardError, ScriptError => e
+        warn_closure_exception('an event callback', e)
+        nil
+      end
+
+      return if pvarresult_ptr.nil? || pvarresult_ptr.to_i.zero?
+
+      bytes = begin
+        WIN32OLE.ruby_value_to_variant_bytes(result, [])
+      rescue StandardError
+        W.pack_variant(W::VT_EMPTY, W.pack_empty)
+      end
+      pvarresult_ptr[0, W::VARIANT_SIZE] = bytes
     end
 
     # Builds a fresh 7-slot IDispatch-shaped vtable (QueryInterface, AddRef,
