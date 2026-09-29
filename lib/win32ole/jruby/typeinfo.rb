@@ -305,5 +305,34 @@ class WIN32OLE
     def reg_close_key
       @reg_close_key ||= Fiddle::Function.new(advapi32['RegCloseKey'], [W::VOIDP], W::LONG, W::STDCALL)
     end
+
+    REG_ENUM_MAX_NAME = 256 # WCHARs; a registry key name is capped at 255 chars (MAX_KEY_LENGTH)
+
+    def reg_enum_key_ex
+      @reg_enum_key_ex ||= Fiddle::Function.new(
+        advapi32['RegEnumKeyExW'],
+        [W::VOIDP, W::DWORD, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP], W::LONG, W::STDCALL
+      )
+    end
+
+    # Mirrors ext/win32ole/win32ole.c's reg_enum_key: returns the name of
+    # the index-th direct subkey of hkey, or nil once the index runs past
+    # the last one (RegEnumKeyExW returns ERROR_NO_MORE_ITEMS).
+    def reg_enum_key(hkey, index)
+      name_out = ("\x00" * (REG_ENUM_MAX_NAME * 2)).b
+      size_out = [REG_ENUM_MAX_NAME].pack('L')
+      err = reg_enum_key_ex.call(hkey, index, name_out, size_out, nil, nil, nil, nil)
+      return nil unless err.zero?
+
+      name_out[0, size_out.unpack1('L') * 2].force_encoding('UTF-16LE').encode('UTF-8')
+    end
+
+    REGKIND_NONE = 2
+
+    def load_type_lib_ex
+      @load_type_lib_ex ||= Fiddle::Function.new(
+        W.oleaut32['LoadTypeLibEx'], [W::VOIDP, W::LONG, W::VOIDP], W::LONG, W::STDCALL
+      )
+    end
   end
 end

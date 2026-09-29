@@ -112,6 +112,105 @@ class WIN32OLE
       raise NotImplementedError, 'registry enumeration is not implemented yet (Phase 2 non-goal)'
     end
 
+    # Mirrors ext/win32ole/win32ole_typelib.c's typelib_file: resolves a
+    # typelib name (e.g. "Microsoft Shell Controls And Automation") or a
+    # CLSID string (e.g. a COM class's own CLSID, whose InprocServer32 DLL
+    # commonly embeds the same typelib) to the file LoadTypeLibEx needs.
+    # Used by WIN32OLE::Type.new's name-based lookup. Returns nil if
+    # neither resolves -- the caller then tries the original string
+    # itself as a literal file path, same as the C fallback.
+    def self.file_for(typelib)
+      file_from_clsid(typelib) || file_from_name(typelib)
+    end
+
+    def self.file_from_clsid(clsid_str)
+      with_reg_subkey(TI::HKEY_CLASSES_ROOT, "CLSID\\#{clsid_str}\\InprocServer32") do |hkey|
+        value = reg_default_string_value(hkey)
+        value && W.expand_environment_strings(value)
+      end
+    end
+
+    def self.file_from_name(name)
+      with_reg_subkey(TI::HKEY_CLASSES_ROOT, 'TypeLib') do |htypelib|
+        result = nil
+        i = 0
+        while (guid = TI.reg_enum_key(htypelib, i))
+          i += 1
+          result = file_from_name_under_guid(htypelib, guid, name)
+          break if result
+        end
+        result
+      end
+    end
+
+    def self.file_from_name_under_guid(htypelib, guid, name)
+      with_reg_subkey(htypelib, guid) do |hclsid|
+        best_version = nil
+        best_fver = nil
+        i = 0
+        while (version = TI.reg_enum_key(hclsid, i))
+          i += 1
+          fver = version.to_f
+          next if best_fver && fver <= best_fver
+
+          matched = with_reg_subkey(hclsid, version) { |hversion| reg_default_string_value(hversion) == name }
+          if matched
+            best_fver = fver
+            best_version = version
+          end
+        end
+
+        best_version && file_under_version_key(hclsid, best_version)
+      end
+    end
+
+    def self.file_under_version_key(hclsid, version)
+      with_reg_subkey(hclsid, version) do |hversion|
+        result = nil
+        i = 0
+        while (lang = TI.reg_enum_key(hversion, i))
+          i += 1
+          result = with_reg_subkey(hversion, lang) { |hlang| reg_typelib_file_path(hlang) }
+          break if result
+        end
+        result
+      end
+    end
+
+    # Under a TypeLib\{guid}\{version}\{lcid} key, the actual file path is
+    # the default value of whichever of these architecture subkeys exists.
+    def self.reg_typelib_file_path(hlang)
+      %w[win64 win32 win16].each do |arch|
+        path = with_reg_subkey(hlang, arch) { |hkey| reg_default_string_value(hkey) }
+        return path if path
+      end
+      nil
+    end
+
+    def self.reg_default_string_value(hkey)
+      empty_name = W.wstr('')
+      type_out = ("\x00" * 4).b
+      size_out = [520].pack('L')
+      data_out = ("\x00" * 520).b
+      err = TI.reg_query_value_ex.call(hkey, empty_name, nil, type_out, data_out, size_out)
+      return nil unless err.zero? && type_out.unpack1('L') == TI::REG_SZ
+
+      data_out[0, size_out.unpack1('L')].force_encoding('UTF-16LE').encode('UTF-8').delete("\x00")
+    end
+
+    def self.with_reg_subkey(hkey, name)
+      out = ("\x00" * W::PTR_SIZE).b
+      err = TI.reg_open_key_ex.call(hkey, W.wstr(name), 0, TI::KEY_READ, out)
+      return nil unless err.zero?
+
+      sub = out.unpack1(W::PACK_PTR)
+      begin
+        yield sub
+      ensure
+        TI.reg_close_key.call(sub)
+      end
+    end
+
     private
 
     def read_documentation(itypelib_ptr, index)

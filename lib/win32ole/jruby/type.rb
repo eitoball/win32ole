@@ -15,17 +15,68 @@ class WIN32OLE
     TKIND_ALIAS = 6
     VT_USERDEFINED = 29
 
-    # Only ever constructed by wrapping an already-obtained ITypeInfo*
-    # pointer, never via a public name-based lookup (spec §3, §4.3).
-    # Win32.vtable_function's pointer-plausibility guard rejects obviously
-    # bogus small integers, but any plausible-looking (>= 0x10000) garbage
-    # address still crashes on dereference -- the real fix is not letting
-    # a public constructor accept a raw address at all. #new itself always
-    # raises; .from_typeinfo_ptr is the one real (internal-only)
-    # construction path.
-    def self.new(*)
-      raise NotImplementedError, 'name-based construction is not implemented yet (Phase 2 non-goal)'
+    # Mirrors ext/win32ole/win32ole_type.c's foletype_initialize:
+    # WIN32OLE::Type.new(typelib, ole_class) resolves +typelib+ (a
+    # registered typelib name or a CLSID string) to a file via
+    # TypeLib.file_for, LoadTypeLibEx's it, then finds the ole_class
+    # member by name.
+    def self.new(typelib, ole_class)
+      typelib = check_string!(typelib)
+      ole_class = check_string!(ole_class)
+
+      itypelib_ptr = load_typelib_for(typelib)
+      begin
+        found = find_type_by_name(itypelib_ptr, ole_class)
+        raise WIN32OLE::RuntimeError, "not found `#{ole_class}` in `#{typelib}`" if found.nil?
+
+        found
+      ensure
+        W.vtable_function(itypelib_ptr, 2, [W::VOIDP], W::DWORD).call(itypelib_ptr)
+      end
     end
+
+    def self.check_string!(val)
+      return val if val.is_a?(::String)
+      return val.to_str if val.respond_to?(:to_str)
+
+      raise TypeError, "no implicit conversion of #{val.class} into String"
+    end
+    private_class_method :check_string!
+
+    def self.load_typelib_for(typelib)
+      file = WIN32OLE::TypeLib.file_for(typelib) || typelib
+      out = ("\x00" * W::PTR_SIZE).b
+      hr = TI.load_type_lib_ex.call(W.wstr(file), TI::REGKIND_NONE, out)
+      raise WIN32OLE::RuntimeError, 'failed to LoadTypeLibEx' if W.failed?(hr)
+
+      out.unpack1(W::PACK_PTR)
+    end
+    private_class_method :load_typelib_for
+
+    # Mirrors oleclass_from_typelib: scan the typelib's members by
+    # GetDocumentation name first (cheap), and only GetTypeInfo (which
+    # AddRefs the result) once a name actually matches.
+    def self.find_type_by_name(itypelib_ptr, ole_class)
+      count = TI.type_info_count_fn(itypelib_ptr).call(itypelib_ptr)
+      count.times do |i|
+        name_out = ("\x00" * W::PTR_SIZE).b
+        hr = TI.documentation_fn_for_typelib(itypelib_ptr).call(itypelib_ptr, i, name_out, nil, nil, nil)
+        next if W.failed?(hr)
+
+        name_bstr = name_out.unpack1(W::PACK_PTR)
+        name = W.bstr_to_s(name_bstr)
+        W.sys_free_string.call(name_bstr) unless name_bstr.zero?
+        next unless name == ole_class
+
+        ti_out = ("\x00" * W::PTR_SIZE).b
+        hr = TI.type_info_fn(itypelib_ptr).call(itypelib_ptr, i, ti_out)
+        return nil if W.failed?(hr)
+
+        return from_typeinfo_ptr(ti_out.unpack1(W::PACK_PTR))
+      end
+      nil
+    end
+    private_class_method :find_type_by_name
 
     def self.from_typeinfo_ptr(itypeinfo_ptr)
       allocate.tap { |type| type.send(:initialize, itypeinfo_ptr) }

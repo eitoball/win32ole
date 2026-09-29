@@ -241,6 +241,26 @@ class WIN32OLE
       @kernel32 ||= Fiddle.dlopen('kernel32')
     end
 
+    def expand_environment_strings_fn
+      @expand_environment_strings_fn ||= Fiddle::Function.new(
+        kernel32['ExpandEnvironmentStringsW'], [VOIDP, VOIDP, DWORD], DWORD, STDCALL
+      )
+    end
+
+    # Registry values like a COM class's InprocServer32 path may contain
+    # %ENVVAR%-style references (e.g. "%SystemRoot%\\system32\\shell32.dll")
+    # that ExpandEnvironmentStrings resolves -- mirrors
+    # ext/win32ole/win32ole_typelib.c's typelib_file_from_clsid.
+    def expand_environment_strings(str)
+      return str unless str.include?('%')
+
+      out = ("\x00" * 520).b # 260 WCHARs, generous for a MAX_PATH-style value
+      len = expand_environment_strings_fn.call(wstr(str), out, 260)
+      return str if len.zero? || len > 260
+
+      out[0, (len - 1) * 2].force_encoding('UTF-16LE').encode('UTF-8')
+    end
+
     def co_initialize
       @co_initialize ||= Fiddle::Function.new(ole32['CoInitialize'], [VOIDP], LONG, STDCALL)
     end
