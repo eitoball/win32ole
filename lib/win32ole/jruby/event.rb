@@ -62,8 +62,8 @@ class WIN32OLE
       W.vtable_function(cp_ptr, 2, [W::VOIDP], W::DWORD).call(cp_ptr)
       ti_ptr = @finalizer_state[:ti_ptr]
       W.vtable_function(ti_ptr, 2, [W::VOIDP], W::DWORD).call(ti_ptr) if ti_ptr && !ti_ptr.zero?
-      Fiddle.free(@finalizer_state[:sink_addr]) if @finalizer_state[:sink_addr]
-      Fiddle.free(@finalizer_state[:vtable_addr]) if @finalizer_state[:vtable_addr]
+      Fiddle.free(Fiddle::Pointer.new(@finalizer_state[:sink_addr])) if @finalizer_state[:sink_addr]
+      Fiddle.free(Fiddle::Pointer.new(@finalizer_state[:vtable_addr])) if @finalizer_state[:vtable_addr]
 
       @finalizer_state[:cp_ptr] = nil
       @finalizer_state[:ti_ptr] = nil
@@ -412,8 +412,8 @@ class WIN32OLE
       if W.failed?(hr)
         release_ptr(connection_point_ptr)
         release_ptr(event_typeinfo_ptr)
-        Fiddle.free(sink_addr)
-        Fiddle.free(vtable_addr)
+        Fiddle.free(Fiddle::Pointer.new(sink_addr))
+        Fiddle.free(Fiddle::Pointer.new(vtable_addr))
         @sink_closures = nil
         raise WIN32OLE::QueryInterfaceError, W.query_interface_error_message('Advise', W.hr_hex(hr))
       end
@@ -445,8 +445,8 @@ class WIN32OLE
         end
         ti_ptr = state[:ti_ptr]
         W.vtable_function(ti_ptr, 2, [W::VOIDP], W::DWORD).call(ti_ptr) if ti_ptr && !ti_ptr.zero?
-        Fiddle.free(state[:sink_addr]) if state[:sink_addr]
-        Fiddle.free(state[:vtable_addr]) if state[:vtable_addr]
+        Fiddle.free(Fiddle::Pointer.new(state[:sink_addr])) if state[:sink_addr]
+        Fiddle.free(Fiddle::Pointer.new(state[:vtable_addr])) if state[:vtable_addr]
       end
     end
 
@@ -735,7 +735,7 @@ class WIN32OLE
         write_byref_variant(var_ptr, value)
       end
     ensure
-      Fiddle.free(names_out.to_i) if names_out
+      Fiddle.free(names_out) if names_out
     end
 
     # Builds a fresh 7-slot IDispatch-shaped vtable (QueryInterface, AddRef,

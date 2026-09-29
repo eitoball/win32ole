@@ -30,8 +30,8 @@ class TestEvent < Test::Unit::TestCase
     assert_equal(0, qi_fn.call(sink_addr, source_iid, ppv))
     assert_equal(sink_addr, ppv.unpack1(W::PACK_PTR))
   ensure
-    Fiddle.free(vtable_addr) if vtable_addr
-    Fiddle.free(sink_addr) if sink_addr
+    Fiddle.free(Fiddle::Pointer.new(vtable_addr)) if vtable_addr
+    Fiddle.free(Fiddle::Pointer.new(sink_addr)) if sink_addr
   end
 
   def test_query_interface_closure_rejects_unknown_iid
@@ -42,8 +42,8 @@ class TestEvent < Test::Unit::TestCase
     assert_equal(E_NOINTERFACE, qi_fn.call(sink_addr, ("\xFE" * 16).b, ppv))
     assert_equal(0, ppv.unpack1(W::PACK_PTR))
   ensure
-    Fiddle.free(vtable_addr) if vtable_addr
-    Fiddle.free(sink_addr) if sink_addr
+    Fiddle.free(Fiddle::Pointer.new(vtable_addr)) if vtable_addr
+    Fiddle.free(Fiddle::Pointer.new(sink_addr)) if sink_addr
   end
 
   def test_add_ref_and_release_closures_share_a_refcount
@@ -56,8 +56,8 @@ class TestEvent < Test::Unit::TestCase
     assert_equal(1, release_fn.call(sink_addr))
     assert_equal(0, release_fn.call(sink_addr))
   ensure
-    Fiddle.free(vtable_addr) if vtable_addr
-    Fiddle.free(sink_addr) if sink_addr
+    Fiddle.free(Fiddle::Pointer.new(vtable_addr)) if vtable_addr
+    Fiddle.free(Fiddle::Pointer.new(sink_addr)) if sink_addr
   end
 
   def test_get_type_info_count_closure_always_reports_zero
@@ -68,8 +68,8 @@ class TestEvent < Test::Unit::TestCase
     assert_equal(0, fn.call(sink_addr, pct))
     assert_equal(0, pct.unpack1('L'))
   ensure
-    Fiddle.free(vtable_addr) if vtable_addr
-    Fiddle.free(sink_addr) if sink_addr
+    Fiddle.free(Fiddle::Pointer.new(vtable_addr)) if vtable_addr
+    Fiddle.free(Fiddle::Pointer.new(sink_addr)) if sink_addr
   end
 
   def test_get_type_info_closure_always_fails_with_bad_index
@@ -80,8 +80,8 @@ class TestEvent < Test::Unit::TestCase
     assert_equal(DISP_E_BADINDEX, fn.call(sink_addr, 0, 0, ppti))
     assert_equal(0, ppti.unpack1(W::PACK_PTR))
   ensure
-    Fiddle.free(vtable_addr) if vtable_addr
-    Fiddle.free(sink_addr) if sink_addr
+    Fiddle.free(Fiddle::Pointer.new(vtable_addr)) if vtable_addr
+    Fiddle.free(Fiddle::Pointer.new(sink_addr)) if sink_addr
   end
 
   def test_build_sink_wires_all_seven_vtable_slots_to_the_closures
@@ -93,8 +93,8 @@ class TestEvent < Test::Unit::TestCase
     end
     assert_equal(vtable_addr, Fiddle::Pointer.new(sink_addr)[0, W::PTR_SIZE].unpack1(W::PACK_PTR))
   ensure
-    Fiddle.free(vtable_addr) if vtable_addr
-    Fiddle.free(sink_addr) if sink_addr
+    Fiddle.free(Fiddle::Pointer.new(vtable_addr)) if vtable_addr
+    Fiddle.free(Fiddle::Pointer.new(sink_addr)) if sink_addr
   end
 
   def test_new_raises_type_error_for_non_win32ole_argument
@@ -343,10 +343,10 @@ class TestEvent < Test::Unit::TestCase
     assert_nil(state[:sink_addr]) # the two malloc'd buffers were freed exactly once
     assert_nil(state[:vtable_addr])
   ensure
-    Fiddle.free(cp_vtable.to_i) if cp_vtable
-    Fiddle.free(cp_obj.to_i) if cp_obj
-    Fiddle.free(ti_vtable.to_i) if ti_vtable
-    Fiddle.free(ti_obj.to_i) if ti_obj
+    Fiddle.free(cp_vtable) if cp_vtable
+    Fiddle.free(cp_obj) if cp_obj
+    Fiddle.free(ti_vtable) if ti_vtable
+    Fiddle.free(ti_obj) if ti_obj
   end
 
   # The one test that covers EVERY vtable_function call site on the
@@ -463,7 +463,7 @@ class TestEvent < Test::Unit::TestCase
     assert_nil(ev.instance_variable_get(:@sink_closures))
   ensure
     [dispatch_vtable, dispatch_obj, container_vtable, container_obj,
-     cp_vtable, cp_obj, ti_vtable, ti_obj].each { |p| Fiddle.free(p.to_i) if p }
+     cp_vtable, cp_obj, ti_vtable, ti_obj].each { |p| Fiddle.free(p) if p }
   end
 
   def fake_byref_variant(vt, ref_bytesize)
@@ -479,7 +479,7 @@ class TestEvent < Test::Unit::TestCase
     ev.send(:write_byref_variant, var_ptr, true)
     assert_equal(-1, ref_buf[0, 2].unpack1('s'))
   ensure
-    Fiddle.free(ref_buf.to_i) if ref_buf
+    Fiddle.free(ref_buf) if ref_buf
   end
 
   def test_write_byref_variant_writes_an_i4
@@ -488,7 +488,7 @@ class TestEvent < Test::Unit::TestCase
     ev.send(:write_byref_variant, var_ptr, 42)
     assert_equal(42, ref_buf[0, 4].unpack1('l'))
   ensure
-    Fiddle.free(ref_buf.to_i) if ref_buf
+    Fiddle.free(ref_buf) if ref_buf
   end
 
   def test_write_byref_variant_writes_an_r8
@@ -497,7 +497,7 @@ class TestEvent < Test::Unit::TestCase
     ev.send(:write_byref_variant, var_ptr, 1.5)
     assert_in_delta(1.5, ref_buf[0, 8].unpack1('d'), 0.0001)
   ensure
-    Fiddle.free(ref_buf.to_i) if ref_buf
+    Fiddle.free(ref_buf) if ref_buf
   end
 
   def test_write_byref_variant_ignores_a_non_byref_variant
@@ -514,7 +514,7 @@ class TestEvent < Test::Unit::TestCase
     ev.send(:write_byref_variant, var_ptr, [1, 2, 3]) # Array has no matching case -- silent no-op, matches C
     assert_equal(7, ref_buf[0, 4].unpack1('l'))
   ensure
-    Fiddle.free(ref_buf.to_i) if ref_buf
+    Fiddle.free(ref_buf) if ref_buf
   end
 
   def test_write_array_outargs_writes_positionally_and_stops_at_cargs
@@ -530,9 +530,9 @@ class TestEvent < Test::Unit::TestCase
     assert_equal(11, ref0[0, 4].unpack1('l'))
     assert_equal(22, ref1[0, 4].unpack1('l'))
   ensure
-    Fiddle.free(rgvarg.to_i) if rgvarg
-    Fiddle.free(ref0.to_i) if ref0
-    Fiddle.free(ref1.to_i) if ref1
+    Fiddle.free(rgvarg) if rgvarg
+    Fiddle.free(ref0) if ref0
+    Fiddle.free(ref1) if ref1
   end
 
   def test_write_byref_variant_ignores_a_null_byref_pointer
@@ -548,7 +548,7 @@ class TestEvent < Test::Unit::TestCase
     ev.send(:write_byref_variant, var_ptr, 200)
     assert_equal(200, ref_buf[0, 1].unpack1('C'))
   ensure
-    Fiddle.free(ref_buf.to_i) if ref_buf
+    Fiddle.free(ref_buf) if ref_buf
   end
 
   def test_write_byref_variant_writes_a_false_bool
@@ -558,7 +558,7 @@ class TestEvent < Test::Unit::TestCase
     ev.send(:write_byref_variant, var_ptr, false)
     assert_equal(0, ref_buf[0, 2].unpack1('s'))
   ensure
-    Fiddle.free(ref_buf.to_i) if ref_buf
+    Fiddle.free(ref_buf) if ref_buf
   end
 
   def test_write_byref_variant_writes_a_float_into_r4
@@ -567,7 +567,7 @@ class TestEvent < Test::Unit::TestCase
     ev.send(:write_byref_variant, var_ptr, 2.5)
     assert_in_delta(2.5, ref_buf[0, 4].unpack1('f'), 0.0001)
   ensure
-    Fiddle.free(ref_buf.to_i) if ref_buf
+    Fiddle.free(ref_buf) if ref_buf
   end
 
   # SysAllocString itself lives in oleaut32.dll, which is not loadable on
@@ -595,7 +595,7 @@ class TestEvent < Test::Unit::TestCase
     assert_equal(W.wstr('hello'), received_wstr)
   ensure
     W.define_singleton_method(:sys_alloc_string, original_sys_alloc_string) if original_sys_alloc_string
-    Fiddle.free(ref_buf.to_i) if ref_buf
+    Fiddle.free(ref_buf) if ref_buf
   end
 
   def test_write_array_outargs_stops_when_the_array_is_longer_than_cargs
@@ -612,9 +612,9 @@ class TestEvent < Test::Unit::TestCase
     assert_equal(11, ref0[0, 4].unpack1('l'))
     assert_equal(22, ref1[0, 4].unpack1('l'))
   ensure
-    Fiddle.free(rgvarg.to_i) if rgvarg
-    Fiddle.free(ref0.to_i) if ref0
-    Fiddle.free(ref1.to_i) if ref1
+    Fiddle.free(rgvarg) if rgvarg
+    Fiddle.free(ref0) if ref0
+    Fiddle.free(ref1) if ref1
   end
 
   # Guards against the priority bug class where the Hash check and the

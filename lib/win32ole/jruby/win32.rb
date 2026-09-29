@@ -466,7 +466,7 @@ class WIN32OLE
       end
       nil
     ensure
-      Fiddle.free(msg.to_i) if msg
+      Fiddle.free(msg) if msg
     end
   end
 end

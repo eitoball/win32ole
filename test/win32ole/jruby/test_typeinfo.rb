@@ -220,8 +220,8 @@ class TestTypeInfo < Test::Unit::TestCase
     assert_same(fn1, fn2)
     assert_equal(0x1000 + TI::ITYPEINFO_VTBL[:GetImplTypeFlags], fn1.to_i)
   ensure
-    Fiddle.free(vtable.to_i) if vtable
-    Fiddle.free(obj.to_i) if obj
+    Fiddle.free(vtable) if vtable
+    Fiddle.free(obj) if obj
   end
 
   def test_ref_type_of_impl_type_fn_resolves_the_documented_slot
@@ -229,8 +229,8 @@ class TestTypeInfo < Test::Unit::TestCase
     fn = TI.ref_type_of_impl_type_fn(obj.to_i)
     assert_equal(0x1000 + TI::ITYPEINFO_VTBL[:GetRefTypeOfImplType], fn.to_i)
   ensure
-    Fiddle.free(vtable.to_i) if vtable
-    Fiddle.free(obj.to_i) if obj
+    Fiddle.free(vtable) if vtable
+    Fiddle.free(obj) if obj
   end
 
   def test_get_names_fn_resolves_the_documented_slot
@@ -238,8 +238,8 @@ class TestTypeInfo < Test::Unit::TestCase
     fn = TI.get_names_fn(obj.to_i)
     assert_equal(0x1000 + TI::ITYPEINFO_VTBL[:GetNames], fn.to_i)
   ensure
-    Fiddle.free(vtable.to_i) if vtable
-    Fiddle.free(obj.to_i) if obj
+    Fiddle.free(vtable) if vtable
+    Fiddle.free(obj) if obj
   end
 
   def test_get_ids_of_names_fn_resolves_the_documented_slot
@@ -247,8 +247,8 @@ class TestTypeInfo < Test::Unit::TestCase
     fn = TI.get_ids_of_names_fn(obj.to_i)
     assert_equal(0x1000 + TI::ITYPEINFO_VTBL[:GetIDsOfNames], fn.to_i)
   ensure
-    Fiddle.free(vtable.to_i) if vtable
-    Fiddle.free(obj.to_i) if obj
+    Fiddle.free(vtable) if vtable
+    Fiddle.free(obj) if obj
   end
 
   def test_type_info_of_guid_fn_resolves_the_documented_slot
@@ -256,8 +256,8 @@ class TestTypeInfo < Test::Unit::TestCase
     fn = TI.type_info_of_guid_fn(obj.to_i)
     assert_equal(0x1000 + TI::ITYPELIB_VTBL[:GetTypeInfoOfGuid], fn.to_i)
   ensure
-    Fiddle.free(vtable.to_i) if vtable
-    Fiddle.free(obj.to_i) if obj
+    Fiddle.free(vtable) if vtable
+    Fiddle.free(obj) if obj
   end
 end
 end

@@ -308,8 +308,8 @@ class TestWin32 < Test::Unit::TestCase
 
     assert_nil(W.query_interface(obj.to_i, ("\x00" * 16).b))
   ensure
-    Fiddle.free(vtable.to_i) if vtable
-    Fiddle.free(obj.to_i) if obj
+    Fiddle.free(vtable) if vtable
+    Fiddle.free(obj) if obj
   end
 
   def test_query_interface_returns_the_ppv_pointer_on_success
@@ -324,8 +324,8 @@ class TestWin32 < Test::Unit::TestCase
 
     assert_equal(0x123456, W.query_interface(obj.to_i, ("\x00" * 16).b))
   ensure
-    Fiddle.free(vtable.to_i) if vtable
-    Fiddle.free(obj.to_i) if obj
+    Fiddle.free(vtable) if vtable
+    Fiddle.free(obj) if obj
   end
 
   def test_pm_remove_matches_win32_constant
