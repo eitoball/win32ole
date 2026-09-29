@@ -284,6 +284,33 @@ class WIN32OLE
     nil
   end
 
+  # ext/win32ole/win32ole.c's fole_getproperty_with_bracket: invokes the
+  # object's default member (DISPID_VALUE) with the given arguments --
+  # e.g. dict['ruby'] on a Scripting.Dictionary, whose default property
+  # is Item. No name lookup happens here (unlike method_missing/#invoke):
+  # all arguments are passed straight through to DISPID_VALUE.
+  def [](*args)
+    hr, result_bytes, excepinfo_bytes = ole_invoke(W::DISPID_VALUE, args, W::DISPATCH_PROPERTYGET)
+    if W.failed?(hr)
+      raise WIN32OLE::RuntimeError, W.method_error_message(args.first, error_detail(hr, excepinfo_bytes))
+    end
+
+    self.class.variant_bytes_to_ruby_value(result_bytes)
+  end
+
+  # ext/win32ole/win32ole.c's fole_setproperty_with_bracket: same
+  # DISPID_VALUE target as #[], but DISPATCH_PROPERTYPUT -- the last
+  # argument is the value, everything before it is an index argument
+  # (e.g. dict[2] = 'TWO').
+  def []=(*args)
+    hr, _result_bytes, excepinfo_bytes = ole_invoke(W::DISPID_VALUE, args, W::DISPATCH_PROPERTYPUT, named_put: true)
+    if W.failed?(hr)
+      raise WIN32OLE::RuntimeError, W.property_put_error_message(args.first, error_detail(hr, excepinfo_bytes))
+    end
+
+    args.last
+  end
+
   # WIN32OLE::Event needs this raw IDispatch* to build its own COM
   # connections (QueryInterface for IConnectionPointContainer,
   # IProvideClassInfo2, etc.) -- there is no general-purpose
