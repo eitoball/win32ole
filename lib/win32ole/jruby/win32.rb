@@ -52,6 +52,8 @@ class WIN32OLE
     CLSCTX_LOCAL_SERVER  = 0x4
 
     LOCALE_SYSTEM_DEFAULT = 0x0800
+    LOCALE_USER_DEFAULT   = 0x0400
+    LCID_INSTALLED        = 0x00000001
 
     IID_NULL      = ("\x00" * 16).b
     IID_IDISPATCH = [0x00020400, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46].pack('LSSC8')
@@ -297,6 +299,32 @@ class WIN32OLE
 
     def sys_free_string
       @sys_free_string ||= Fiddle::Function.new(oleaut32['SysFreeString'], [VOIDP], VOID, STDCALL)
+    end
+
+    def enum_system_locales_a
+      @enum_system_locales_a ||= Fiddle::Function.new(
+        kernel32['EnumSystemLocalesA'], [VOIDP, DWORD], DWORD, STDCALL
+      )
+    end
+
+    # Mirrors ext/win32ole/win32ole.c's lcid_installed: EnumSystemLocalesA
+    # hands each installed LCID to the callback as an 8-hex-digit ANSI
+    # string (e.g. "00000409"), lowercase, zero-padded -- same format
+    # produced by C's "%08lx". Returning 0 (FALSE) from the callback stops
+    # the enumeration early once a match is found.
+    def locale_installed?(lcid)
+      target = format('%08x', lcid)
+      installed = false
+      callback = Fiddle::Closure::BlockCaller.new(DWORD, [VOIDP], STDCALL) do |str_ptr|
+        if Fiddle::Pointer.new(str_ptr)[0, 8] == target
+          installed = true
+          0
+        else
+          1
+        end
+      end
+      enum_system_locales_a.call(callback, LCID_INSTALLED)
+      installed
     end
 
     FORMAT_MESSAGE_ALLOCATE_BUFFER = 0x00000100

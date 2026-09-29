@@ -255,7 +255,7 @@ class WIN32OLE
       src_type = W.ruby_to_variant_type(val)
       src = W.pack_variant(W::VT_FOR_TYPE.fetch(src_type), WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free ||= [])[8, 8])
       dest = ("\x00" * W::VARIANT_SIZE).b
-      hr = W.variant_change_type.call(dest, src, W::LOCALE_SYSTEM_DEFAULT, 0, base_vt)
+      hr = W.variant_change_type.call(dest, src, WIN32OLE.locale, 0, base_vt)
       raise WIN32OLE::RuntimeError, "failed to change variant type: #{W.hr_hex(hr)}" if W.failed?(hr)
 
       dest

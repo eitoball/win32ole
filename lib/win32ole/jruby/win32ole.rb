@@ -21,7 +21,29 @@ class WIN32OLE
   W = Win32
   private_constant :W
 
+  LOCALE_SYSTEM_DEFAULT = W::LOCALE_SYSTEM_DEFAULT
+  LOCALE_USER_DEFAULT = W::LOCALE_USER_DEFAULT
+
+  @lcid = LOCALE_SYSTEM_DEFAULT
+
   class << self
+    def locale
+      @lcid
+    end
+
+    # ext/win32ole/win32ole.c's fole_s_set_locale: the two sentinel LCIDs
+    # are always accepted (they resolve dynamically at call time, so
+    # EnumSystemLocalesA can't confirm them up front); any other LCID must
+    # name an installed locale.
+    def locale=(lcid)
+      unless lcid == LOCALE_SYSTEM_DEFAULT || lcid == LOCALE_USER_DEFAULT || W.locale_installed?(lcid)
+        raise WIN32OLE::RuntimeError, "not installed locale: #{lcid}"
+      end
+
+      @lcid = lcid
+      nil
+    end
+
     def wrap_dispatch_pointer(ptr)
       obj = allocate
       obj.instance_variable_set(:@ptr, ptr)
@@ -228,6 +250,29 @@ class WIN32OLE
   end
 
   public
+
+  # ext/win32ole/win32ole.c's fole_setproperty: like the `name=(val)`
+  # method_missing path, but for properties that also take index
+  # arguments (e.g. sheet.setproperty('Cells', 1, 2, 10)) -- the last
+  # argument is the value, everything before it is an index arg, and (per
+  # ole_invoke) they're all invoked as one DISPATCH_PROPERTYPUT call with
+  # the value carried as the DISPID_PROPERTYPUT named argument.
+  def setproperty(name, *args)
+    if args.empty?
+      raise WIN32OLE::RuntimeError, W.property_put_error_message(name, "\nargument error")
+    end
+
+    dispid = dispid_for(name.to_s)
+    return super if dispid.nil?
+
+    hr, _result_bytes, excepinfo_bytes = ole_invoke(dispid, args, W::DISPATCH_PROPERTYPUT, named_put: true)
+
+    if W.failed?(hr)
+      raise WIN32OLE::RuntimeError, W.property_put_error_message(name, error_detail(hr, excepinfo_bytes))
+    end
+
+    nil
+  end
 
   # WIN32OLE::Event needs this raw IDispatch* to build its own COM
   # connections (QueryInterface for IConnectionPointContainer,
