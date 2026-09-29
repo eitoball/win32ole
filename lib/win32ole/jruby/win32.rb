@@ -271,6 +271,10 @@ class WIN32OLE
       @co_task_mem_free ||= Fiddle::Function.new(ole32['CoTaskMemFree'], [VOIDP], VOID, STDCALL)
     end
 
+    def co_create_guid
+      @co_create_guid ||= Fiddle::Function.new(ole32['CoCreateGuid'], [VOIDP], LONG, STDCALL)
+    end
+
     def prog_id_from_clsid_fn
       # ProgIDFromCLSID is an ole32 export, not oleaut32.
       @prog_id_from_clsid_fn ||= Fiddle::Function.new(ole32['ProgIDFromCLSID'], [VOIDP, VOIDP], LONG, STDCALL)

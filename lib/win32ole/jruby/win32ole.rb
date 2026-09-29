@@ -173,6 +173,16 @@ class WIN32OLE
       "    HRESULT error code:#{W.hr_hex(hr)}\n      #{W.hresult_system_message(hr)}"
     end
 
+    def create_guid
+      buf = ("\x00" * 16).b
+      hr = W.co_create_guid.call(buf)
+      raise WIN32OLE::RuntimeError, "failed to create GUID\n#{hresult_detail(hr)}" if W.failed?(hr)
+
+      d1, d2, d3 = buf.unpack('LSS')
+      d4 = buf[8, 8].unpack('C8')
+      format('{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}', d1, d2, d3, *d4)
+    end
+
     def const_load(ole, mod)
       ole.ole_type.ole_typelib.ole_types.each do |type|
         type.variables.each do |var|
