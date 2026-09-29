@@ -117,6 +117,13 @@ class WIN32OLE
       @name, @helpstring, @help_context, @helpfile = read_documentation(@ptr, -1)
     end
 
+    # WIN32OLE::Method.new(oletype, name) needs this raw ITypeInfo* to
+    # search oletype's own funcs and its implemented interfaces -- same
+    # deliberate, documented crack in encapsulation as WIN32OLE#dispatch_ptr.
+    def itypeinfo_ptr
+      @ptr
+    end
+
     def name
       @name
     end
@@ -180,7 +187,7 @@ class WIN32OLE
 
     def ole_methods
       count = type_attr_func_count
-      Array.new(count) { |i| WIN32OLE::Method.new(@ptr, i) }
+      Array.new(count) { |i| WIN32OLE::Method.from_typeinfo_ptr(@ptr, i) }
     end
 
     def ole_typelib
