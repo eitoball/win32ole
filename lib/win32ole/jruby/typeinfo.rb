@@ -284,6 +284,7 @@ class WIN32OLE
     HKEY_CLASSES_ROOT = 0x80000000
     KEY_READ = 0x20019
     REG_SZ = 1
+    REG_EXPAND_SZ = 2
 
     def advapi32
       @advapi32 ||= Fiddle.dlopen('advapi32')

@@ -12,13 +12,79 @@ class WIN32OLE
     LIBFLAG_FRESTRICTED = 0x1
     LIBFLAG_FHIDDEN = 0x4
 
-    # Only ever constructed by wrapping an already-obtained ITypeLib*
-    # pointer, never via a public name-based lookup (spec §3, §4.3). #new
-    # itself always raises; .from_itypelib_ptr is the one real
-    # (internal-only) construction path. See Type's identical pattern for
-    # the full rationale.
-    def self.new(*)
-      raise NotImplementedError, 'name-based construction is not implemented yet (Phase 2 non-goal)'
+    # Mirrors ext/win32ole/win32ole_typelib.c's foletypelib_initialize:
+    # +typelib+ is tried, in order, as a registered typelib name
+    # (major/minor ignored if this matches), then as a typelib GUID
+    # (major/minor pick a specific version, else the highest registered),
+    # then as a literal file path.
+    def self.new(*args)
+      unless (1..3).cover?(args.size)
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..3)"
+      end
+
+      typelib = check_string!(args[0])
+      file = file_from_name(typelib) || file_from_guid_and_version(typelib, args[1], args[2])
+      itypelib_ptr = load_typelib(file || typelib)
+      raise WIN32OLE::RuntimeError, "not found type library `#{typelib}`" if itypelib_ptr.nil?
+
+      allocate.tap { |tlib| tlib.send(:initialize, itypelib_ptr) }
+    end
+
+    def self.check_string!(val)
+      return val if val.is_a?(::String)
+      return val.to_str if val.respond_to?(:to_str)
+
+      raise TypeError, "no implicit conversion of #{val.class} into String"
+    end
+
+    def self.load_typelib(file)
+      out = ("\x00" * W::PTR_SIZE).b
+      hr = TI.load_type_lib_ex.call(W.wstr(file), TI::REGKIND_NONE, out)
+      return nil if W.failed?(hr)
+
+      out.unpack1(W::PACK_PTR)
+    end
+
+    # Mirrors oletypelib_search_registry2: +guid+ is a typelib GUID
+    # string (TypeLib\{guid} directly, not the CLSID\{clsid} root
+    # file_from_clsid uses). If major is given, only that exact version
+    # is accepted; otherwise the highest version with a registered name
+    # wins, same tie-break as file_from_name_under_guid.
+    def self.file_from_guid_and_version(guid, major, minor)
+      with_reg_subkey(TI::HKEY_CLASSES_ROOT, "TypeLib\\#{guid}") do |hguid|
+        version = version_string(major, minor)
+        if version
+          valid = with_reg_subkey(hguid, version) { |hversion| !reg_default_string_value(hversion).nil? }
+          version = nil unless valid
+        else
+          version = highest_named_version_under(hguid)
+        end
+        version && file_under_version_key(hguid, version)
+      end
+    end
+
+    def self.version_string(major, minor)
+      return nil if major.nil?
+
+      minor.nil? ? major.to_s : "#{major}.#{minor}"
+    end
+
+    def self.highest_named_version_under(hguid)
+      best_version = nil
+      best_fver = nil
+      i = 0
+      while (version = TI.reg_enum_key(hguid, i))
+        i += 1
+        fver = version.to_f
+        next if best_fver && fver <= best_fver
+
+        valid = with_reg_subkey(hguid, version) { |hversion| !reg_default_string_value(hversion).nil? }
+        if valid
+          best_fver = fver
+          best_version = version
+        end
+      end
+      best_version
     end
 
     def self.from_itypelib_ptr(itypelib_ptr)
@@ -126,8 +192,7 @@ class WIN32OLE
 
     def self.file_from_clsid(clsid_str)
       with_reg_subkey(TI::HKEY_CLASSES_ROOT, "CLSID\\#{clsid_str}\\InprocServer32") do |hkey|
-        value = reg_default_string_value(hkey)
-        value && W.expand_environment_strings(value)
+        reg_default_string_value(hkey)
       end
     end
 
@@ -194,9 +259,11 @@ class WIN32OLE
       size_out = [520].pack('L')
       data_out = ("\x00" * 520).b
       err = TI.reg_query_value_ex.call(hkey, empty_name, nil, type_out, data_out, size_out)
-      return nil unless err.zero? && type_out.unpack1('L') == TI::REG_SZ
+      type = type_out.unpack1('L')
+      return nil unless err.zero? && (type == TI::REG_SZ || type == TI::REG_EXPAND_SZ)
 
-      data_out[0, size_out.unpack1('L')].force_encoding('UTF-16LE').encode('UTF-8').delete("\x00")
+      value = data_out[0, size_out.unpack1('L')].force_encoding('UTF-16LE').encode('UTF-8').delete("\x00")
+      type == TI::REG_EXPAND_SZ ? W.expand_environment_strings(value) : value
     end
 
     def self.with_reg_subkey(hkey, name)
