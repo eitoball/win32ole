@@ -30,6 +30,7 @@ class WIN32OLE
     def name
       @name
     end
+    alias to_s name
 
     def ole_type
       TI.vartype_name(@vt)

@@ -59,6 +59,7 @@ class WIN32OLE
     def name
       @helpstring
     end
+    alias to_s name
 
     def version
       "#{@major}.#{@minor}"

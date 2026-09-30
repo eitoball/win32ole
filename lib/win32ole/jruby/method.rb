@@ -174,6 +174,7 @@ class WIN32OLE
     def name
       @name
     end
+    alias to_s name
 
     def return_type
       TI.vartype_name(@return_vt)

@@ -261,6 +261,39 @@ class WIN32OLE
 
   public
 
+  # ext/win32ole/win32ole.c's fole_invoke: the explicit-call form of
+  # method_missing's regular (non property-put) path -- lets a caller
+  # invoke a method whose name collides with a Ruby method (Object#send
+  # works too, but this matches MRI's documented API).
+  def invoke(name, *args)
+    dispid = dispid_for(name.to_s)
+    return super if dispid.nil?
+
+    hr, result_bytes, excepinfo_bytes = ole_invoke(dispid, args, W::DISPATCH_METHOD | W::DISPATCH_PROPERTYGET)
+
+    if W.failed?(hr)
+      raise WIN32OLE::RuntimeError, W.method_error_message(name, error_detail(hr, excepinfo_bytes))
+    end
+
+    self.class.variant_bytes_to_ruby_value(result_bytes)
+  end
+
+  # ext/win32ole/win32ole.c's fole_invoke2/fole_getproperty2/fole_setproperty2:
+  # the "early binding" siblings of #invoke/#setproperty -- dispid and
+  # per-argument VARTYPE are given explicitly instead of resolved by name,
+  # so no GetIDsOfNames round-trip happens.
+  def _invoke(dispid, args, types)
+    ole_invoke2(dispid, args, types, W::DISPATCH_METHOD)
+  end
+
+  def _getproperty(dispid, args, types)
+    ole_invoke2(dispid, args, types, W::DISPATCH_PROPERTYGET)
+  end
+
+  def _setproperty(dispid, args, types)
+    ole_invoke2(dispid, args, types, W::DISPATCH_PROPERTYPUT)
+  end
+
   # ext/win32ole/win32ole.c's fole_setproperty: like the `name=(val)`
   # method_missing path, but for properties that also take index
   # arguments (e.g. sheet.setproperty('Cells', 1, 2, 10)) -- the last
@@ -364,6 +397,56 @@ class WIN32OLE
   end
 
   private
+
+  # ext/win32ole/win32ole.c's ole_invoke2: builds one DISPPARAMS entry per
+  # (value, VARTYPE) pair -- VT_VARIANT means "pass as its own natural
+  # type" (no coercion), matching C's skip of VariantChangeTypeEx for that
+  # case; anything else is packed via WIN32OLE::Variant.new(val, vt),
+  # which already implements the explicit-VARTYPE coercion (including
+  # VT_ARRAY/VT_BYREF) that this needs. The Variant objects are kept alive
+  # in keep_alive through the Invoke call, since VT_BYREF's backing buffer
+  # is otherwise only referenced from their own instance state.
+  def ole_invoke2(dispid, args, types, dispkind)
+    raise WIN32OLE::RuntimeError, 'this WIN32OLE object has already been released' if @ptr.nil? || @ptr.zero?
+    raise TypeError, 'wrong argument type (expected Array)' unless args.is_a?(::Array) && types.is_a?(::Array)
+
+    bstrs_to_free = []
+    keep_alive = []
+    arg_variants = args.zip(types).map do |val, vt|
+      if vt == W::VT_VARIANT
+        WIN32OLE.ruby_value_to_variant_bytes(val, bstrs_to_free)
+      else
+        variant = WIN32OLE::Variant.new(val, vt)
+        keep_alive << variant
+        variant.instance_variable_get(:@var)
+      end
+    end.reverse
+    args_blob = arg_variants.join
+    args_ptr = args_blob.empty? ? nil : W.native_pointer_for(args_blob)
+
+    named_put = (dispkind & W::DISPATCH_PROPERTYPUT) != 0
+    named_blob = named_put ? [W::DISPID_PROPERTYPUT].pack('l') : ''
+    named_ptr = named_blob.empty? ? nil : W.native_pointer_for(named_blob)
+
+    dispparams = [
+      args_ptr ? args_ptr.to_i : 0,
+      named_ptr ? named_ptr.to_i : 0,
+      arg_variants.size,
+      named_put ? 1 : 0
+    ].pack("#{W::PACK_PTR}#{W::PACK_PTR}LL")
+
+    excepinfo = ("\x00" * W::EXCEPINFO_SIZE).b
+    result = ("\x00" * W::VARIANT_SIZE).b
+
+    hr = invoke_fn.call(@ptr, dispid, W::IID_NULL, 0, dispkind, dispparams, result, excepinfo, nil)
+    bstrs_to_free.each { |bstr| W.sys_free_string.call(bstr) unless bstr.zero? }
+
+    if W.failed?(hr)
+      raise WIN32OLE::RuntimeError, W.method_error_message("<dispatch id:#{dispid}>", error_detail(hr, excepinfo))
+    end
+
+    self.class.variant_bytes_to_ruby_value(result)
+  end
 
   def error_detail(hr, excepinfo_bytes)
     if hr == DISP_E_EXCEPTION

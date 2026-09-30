@@ -127,6 +127,7 @@ class WIN32OLE
     def name
       @name
     end
+    alias to_s name
 
     def ole_type
       TI::TYPEKIND_NAMES[@typekind]
