@@ -13,7 +13,6 @@ class WIN32OLE
     TYPEFLAG_FHIDDEN = 0x10
     TYPEFLAG_FRESTRICTED = 0x200
     TKIND_ALIAS = 6
-    VT_USERDEFINED = 29
 
     # Mirrors ext/win32ole/win32ole_type.c's foletype_initialize:
     # WIN32OLE::Type.new(typelib, ole_class) resolves +typelib+ (a
@@ -104,14 +103,14 @@ class WIN32OLE
       @major = typeattr.wMajorVerNum
       @minor = typeattr.wMinorVerNum
       @type_flags = typeattr.wTypeFlags
-      @alias_vt = typeattr.tdescAlias_vt
-      # tdescAlias_union_ptr is a `void *` struct field, so Fiddle hands back
-      # a Fiddle::Pointer here (never a plain integer). GetRefTypeInfo's
-      # hRefType parameter is a DWORD, not a pointer, so it must be
-      # converted to an integer before being passed to that call (see
-      # src_type below) — a Fiddle::Pointer object is not a valid argument
-      # for a DWORD-typed native parameter.
-      @alias_union_ptr = typeattr.tdescAlias_union_ptr.to_i
+      # ole_type_src_type: the aliased type, resolved now (while TYPEATTR is
+      # alive) through the raw TYPEDESC -- reading its union through the
+      # struct's `void *` accessor overflows on the garbage upper bytes it
+      # holds for anything but a real pointer.
+      @src_type =
+        if @typekind == TKIND_ALIAS
+          TI.typedesc_details(@ptr, attr_ptr + TI::TYPEATTR.offsetof('tdescAlias_union_ptr')).last
+        end
       TI.release_type_attr_fn(@ptr).call(@ptr, attr_ptr)
 
       @name, @helpstring, @help_context, @helpfile = read_documentation(@ptr, -1)
@@ -172,13 +171,7 @@ class WIN32OLE
     end
 
     def src_type
-      return nil unless @typekind == TKIND_ALIAS && @alias_vt == VT_USERDEFINED
-
-      ref_out = ("\x00" * W::PTR_SIZE).b
-      hr = TI.ref_type_info_fn(@ptr).call(@ptr, @alias_union_ptr, ref_out)
-      return nil if W.failed?(hr)
-
-      Type.from_typeinfo_ptr(ref_out.unpack1(W::PACK_PTR)).name
+      @src_type
     end
 
     def variables
