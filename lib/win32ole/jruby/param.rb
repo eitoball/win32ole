@@ -15,6 +15,22 @@ class WIN32OLE
     PARAMFLAG_FHASDEFAULT = 0x20
     PARAMDESCEX_DEFAULT_VALUE_OFFSET = 8
 
+    # ext/win32ole/win32ole_param.c's foleparam_initialize: the n-th
+    # (1-based) parameter of a WIN32OLE::Method.
+    def self.new(olemethod, n)
+      raise TypeError, '1st parameter must be WIN32OLE::Method object' unless olemethod.is_a?(WIN32OLE::Method)
+      raise TypeError, "no implicit conversion of #{n.class} into Integer" unless n.is_a?(::Integer)
+
+      params = olemethod.params
+      raise IndexError, "index of param must be in 1..#{params.size}" unless (1..params.size).cover?(n)
+
+      params[n - 1]
+    end
+
+    def self.from_elemdesc(itypeinfo_ptr, elemdesc_ptr, name)
+      allocate.tap { |param| param.send(:initialize, itypeinfo_ptr, elemdesc_ptr, name) }
+    end
+
     def initialize(itypeinfo_ptr, elemdesc_ptr, name)
       @name = name
       elemdesc = TI::ELEMDESC.new(elemdesc_ptr)

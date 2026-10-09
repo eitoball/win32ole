@@ -168,7 +168,7 @@ class WIN32OLE
       # spurious nameless Param.
       @params = Array.new(param_names.length) do |i|
         elemdesc_ptr = elemdesc_array_ptr + i * TI::ELEMDESC.size
-        WIN32OLE::Param.new(itypeinfo_ptr, elemdesc_ptr, param_names[i])
+        WIN32OLE::Param.from_elemdesc(itypeinfo_ptr, elemdesc_ptr, param_names[i])
       end
 
       TI.release_func_desc_fn(itypeinfo_ptr).call(itypeinfo_ptr, funcdesc_ptr)

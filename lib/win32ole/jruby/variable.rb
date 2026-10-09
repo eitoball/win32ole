@@ -13,6 +13,16 @@ class WIN32OLE
     VARFLAG_FNONBROWSABLE = 0x400
     VAR_CONST = 2
 
+    # ext/win32ole/win32ole_variable.c undefines the allocator, so a
+    # Variable can't be constructed directly -- only via Type#variables.
+    def self.new(*)
+      raise TypeError, "allocator undefined for #{self}"
+    end
+
+    def self.from_typeinfo_ptr(itypeinfo_ptr, index)
+      allocate.tap { |var| var.send(:initialize, itypeinfo_ptr, index) }
+    end
+
     def initialize(itypeinfo_ptr, index)
       vardesc_out = ("\x00" * W::PTR_SIZE).b
       hr = TI.var_desc_fn(itypeinfo_ptr).call(itypeinfo_ptr, index, vardesc_out)

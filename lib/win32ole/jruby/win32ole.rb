@@ -52,6 +52,7 @@ class WIN32OLE
     end
 
     def connect(server, host = nil)
+      server = string_value(server)
       raise NotImplementedError, 'remote OLE (host) is not supported yet' unless host.nil?
 
       hr = W.co_initialize.call(nil)
@@ -195,11 +196,22 @@ class WIN32OLE
       nil
     end
 
-    private :resolve_clsid, :hresult_detail, :release_com_pointer
+    # Ruby-level StringValue: a String, or anything with an implicit
+    # #to_str, else TypeError -- which is what ext/win32ole raises for a
+    # non-string server/host/method name.
+    def string_value(val)
+      String.try_convert(val) || raise(TypeError, "no implicit conversion of #{val.class} into String")
+    end
+
+    private :resolve_clsid, :hresult_detail, :release_com_pointer, :string_value
   end
 
   def initialize(server, host = nil)
-    raise NotImplementedError, 'remote OLE (host) is not supported yet' unless host.nil?
+    server = self.class.send(:string_value, server)
+    unless host.nil?
+      self.class.send(:string_value, host)
+      raise NotImplementedError, 'remote OLE (host) is not supported yet'
+    end
 
     hr = W.co_initialize.call(nil)
     raise 'fail: OLE initialize' unless hr.zero? || hr == 1
@@ -231,8 +243,11 @@ class WIN32OLE
 
   DISP_E_EXCEPTION = -2147352567 # 0x80020009
 
+  # A Symbol (the normal path) or a String is accepted, as fole_missing's
+  # rb_check_symbol + StringValueCStr does; anything else is a TypeError.
   def method_missing(name, *args)
-    plan = W.dispatch_plan(name.to_s, args)
+    mname = name.is_a?(::Symbol) ? name.to_s : self.class.send(:string_value, name)
+    plan = W.dispatch_plan(mname, args)
     dispid = dispid_for(plan[:name])
     if dispid.nil?
       if plan[:named_put]
@@ -346,9 +361,9 @@ class WIN32OLE
 
   # WIN32OLE::Event needs this raw IDispatch* to build its own COM
   # connections (QueryInterface for IConnectionPointContainer,
-  # IProvideClassInfo2, etc.) -- there is no general-purpose
-  # QueryInterface API (#ole_query_interface is a Phase 2 non-goal), so
-  # this is Event's one deliberate, documented crack in encapsulation.
+  # IProvideClassInfo2, etc.) -- #ole_query_interface wraps whatever it
+  # gets back as a WIN32OLE, which is not what Event needs, so this is
+  # Event's one deliberate, documented crack in encapsulation.
   def dispatch_ptr
     @ptr
   end
@@ -392,8 +407,25 @@ class WIN32OLE
     raise NotImplementedError, 'launching help files is not implemented (Phase 2 non-goal)'
   end
 
-  def ole_query_interface(*)
-    raise NotImplementedError, 'arbitrary QueryInterface is not implemented (Phase 2 non-goal)'
+  # ext/win32ole/win32ole.c's fole_query_interface: like C, the returned
+  # interface pointer is wrapped as a WIN32OLE (i.e. treated as IDispatch*).
+  def ole_query_interface(iid)
+    iid = self.class.send(:string_value, iid)
+    raise WIN32OLE::RuntimeError, 'this WIN32OLE object has already been released' if @ptr.nil? || @ptr.zero?
+
+    iid_bytes = ("\x00" * 16).b
+    hr = W.clsid_from_string.call(W.wstr(iid), iid_bytes)
+    if W.failed?(hr)
+      raise WIN32OLE::RuntimeError, "invalid iid: `#{iid}'\n#{self.class.send(:hresult_detail, hr)}"
+    end
+
+    ppv = ("\x00" * W::PTR_SIZE).b
+    hr = W.vtable_function(@ptr, 0, [W::VOIDP, W::VOIDP, W::VOIDP], W::LONG).call(@ptr, iid_bytes, ppv)
+    if W.failed?(hr)
+      raise WIN32OLE::QueryInterfaceError, "failed to get interface `#{iid}'\n#{self.class.send(:hresult_detail, hr)}"
+    end
+
+    self.class.wrap_dispatch_pointer(ppv.unpack1(W::PACK_PTR))
   end
 
   private

@@ -141,11 +141,11 @@ class WIN32OLE
     # named itf_name; that impl type's own GUID becomes the event source IID.
     def find_iid_by_name(ole, itf_name)
       itypeinfo_ptr = get_type_info0(ole.dispatch_ptr)
-      raise WIN32OLE::RuntimeError, 'interface not found' if itypeinfo_ptr.nil?
+      raise ::RuntimeError, 'interface not found' if itypeinfo_ptr.nil?
 
       tlib_ptr = containing_typelib(itypeinfo_ptr)
       release_ptr(itypeinfo_ptr)
-      raise WIN32OLE::RuntimeError, 'interface not found' if tlib_ptr.nil?
+      raise ::RuntimeError, 'interface not found' if tlib_ptr.nil?
 
       found_iid = nil
       found_ti_ptr = nil
@@ -182,7 +182,7 @@ class WIN32OLE
         release_ptr(ti_ptr)
       end
       release_ptr(tlib_ptr)
-      raise WIN32OLE::RuntimeError, 'interface not found' if found_iid.nil?
+      raise ::RuntimeError, 'interface not found' if found_iid.nil?
 
       [found_iid, found_ti_ptr]
     end
@@ -192,16 +192,16 @@ class WIN32OLE
     # (the IProvideClassInfo2::GetGUID path in find_default_source).
     def find_iid_by_guid(ole, iid_bytes)
       itypeinfo_ptr = get_type_info0(ole.dispatch_ptr)
-      raise WIN32OLE::RuntimeError, 'interface not found' if itypeinfo_ptr.nil?
+      raise ::RuntimeError, 'interface not found' if itypeinfo_ptr.nil?
 
       tlib_ptr = containing_typelib(itypeinfo_ptr)
       release_ptr(itypeinfo_ptr)
-      raise WIN32OLE::RuntimeError, 'interface not found' if tlib_ptr.nil?
+      raise ::RuntimeError, 'interface not found' if tlib_ptr.nil?
 
       ti_out = ("\x00" * W::PTR_SIZE).b
       hr = TI.type_info_of_guid_fn(tlib_ptr).call(tlib_ptr, iid_bytes, ti_out)
       release_ptr(tlib_ptr)
-      raise WIN32OLE::RuntimeError, 'interface not found' if W.failed?(hr)
+      raise ::RuntimeError, 'interface not found' if W.failed?(hr)
 
       ti_out.unpack1(W::PACK_PTR)
     end
@@ -328,12 +328,12 @@ class WIN32OLE
     # `iid_bytes` result rather than an `itypeinfo_ptr` result).
     def find_default_source(ole)
       itypeinfo_ptr = provide_class_info_typeinfo(ole.dispatch_ptr) || get_type_info0(ole.dispatch_ptr)
-      raise WIN32OLE::RuntimeError, 'interface not found' if itypeinfo_ptr.nil?
+      raise ::RuntimeError, 'interface not found' if itypeinfo_ptr.nil?
 
       attr_ptr = type_attr_ptr(itypeinfo_ptr)
       if attr_ptr.nil?
         release_ptr(itypeinfo_ptr)
-        raise WIN32OLE::RuntimeError, 'interface not found'
+        raise ::RuntimeError, 'interface not found'
       end
 
       result_ti_ptr = find_default_source_from_typeinfo(itypeinfo_ptr, attr_ptr)
@@ -347,12 +347,12 @@ class WIN32OLE
       end
       TI.release_type_attr_fn(itypeinfo_ptr).call(itypeinfo_ptr, attr_ptr)
       release_ptr(itypeinfo_ptr)
-      raise WIN32OLE::RuntimeError, 'interface not found' if result_ti_ptr.nil?
+      raise ::RuntimeError, 'interface not found' if result_ti_ptr.nil?
 
       result_attr_ptr = type_attr_ptr(result_ti_ptr)
       if result_attr_ptr.nil?
         release_ptr(result_ti_ptr)
-        raise WIN32OLE::RuntimeError, 'interface not found'
+        raise ::RuntimeError, 'interface not found'
       end
       guid = type_guid(result_attr_ptr)
       TI.release_type_attr_fn(result_ti_ptr).call(result_ti_ptr, result_attr_ptr)
@@ -367,7 +367,7 @@ class WIN32OLE
       if iid_bytes
         begin
           return [iid_bytes, find_iid_by_guid(ole, iid_bytes)]
-        rescue WIN32OLE::RuntimeError
+        rescue ::RuntimeError
           # IProvideClassInfo2 succeeded but the IID it named isn't
           # resolvable in this typelib -- fall through to the
           # IProvideClassInfo/ImplType-traversal path below, matching

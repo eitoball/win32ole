@@ -183,7 +183,7 @@ class WIN32OLE
 
     def variables
       count = type_attr_var_count
-      Array.new(count) { |i| WIN32OLE::Variable.new(@ptr, i) }
+      Array.new(count) { |i| WIN32OLE::Variable.from_typeinfo_ptr(@ptr, i) }
     end
 
     def ole_methods
