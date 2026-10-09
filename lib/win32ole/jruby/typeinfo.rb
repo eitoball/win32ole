@@ -111,6 +111,53 @@ class WIN32OLE
       VARTYPE_NAMES.fetch(vt) { "Unknown Type #{vt}" }
     end
 
+    VT_PTR = 26
+    VT_SAFEARRAY = 27
+    VT_USERDEFINED = 29
+    MEMBERID_NIL = -1
+
+    # Mirrors ext/win32ole/win32ole.c's ole_typedesc2val: the type-detail
+    # chain for the TYPEDESC at tdesc_addr, e.g. ["PTR", "USERDEFINED",
+    # "Folder"]. Its last element is what return_type/ole_type report.
+    # The union is read as raw bytes, not through a struct's `void *`
+    # accessor: for VT_USERDEFINED only its low 4 bytes (the HREFTYPE) are
+    # meaningful and the rest can be garbage that overflows a pointer.
+    def typedesc_details(itypeinfo_ptr, tdesc_addr, details = [])
+      tdesc = Fiddle::Pointer.new(tdesc_addr)
+      union = tdesc[0, W::PTR_SIZE].unpack1(W::PACK_PTR)
+      vt = tdesc[W::PTR_SIZE, 2].unpack1('S')
+      details << vartype_name(vt)
+      case vt
+      when VT_PTR, VT_SAFEARRAY
+        typedesc_details(itypeinfo_ptr, union, details)
+      when VT_USERDEFINED
+        name = ref_type_name(itypeinfo_ptr, union & 0xFFFFFFFF)
+        details << name if name
+        details
+      else
+        details
+      end
+    end
+
+    def ref_type_name(itypeinfo_ptr, hreftype)
+      ref_out = ("\x00" * W::PTR_SIZE).b
+      return nil if W.failed?(ref_type_info_fn(itypeinfo_ptr).call(itypeinfo_ptr, hreftype, ref_out))
+
+      ref_ptr = ref_out.unpack1(W::PACK_PTR)
+      begin
+        name_out = ("\x00" * W::PTR_SIZE).b
+        hr = documentation_fn_for_typeinfo(ref_ptr).call(ref_ptr, MEMBERID_NIL, name_out, nil, nil, nil)
+        return nil if W.failed?(hr)
+
+        bstr = name_out.unpack1(W::PACK_PTR)
+        name = W.bstr_to_s(bstr)
+        W.sys_free_string.call(bstr) unless bstr.zero?
+        name
+      ensure
+        W.vtable_function(ref_ptr, 2, [W::VOIDP], W::DWORD).call(ref_ptr)
+      end
+    end
+
     def invoke_kind_name(invkind)
       if (invkind & INVOKE_PROPERTYGET != 0) && (invkind & INVOKE_PROPERTYPUT != 0)
         'PROPERTY'

@@ -293,8 +293,8 @@ class WIN32OLE
       docstring_bstr = docstring_out.unpack1(W::PACK_PTR)
       helpfile_bstr = helpfile_out.unpack1(W::PACK_PTR)
       name = W.bstr_to_s(name_bstr)
-      helpstring = W.bstr_to_s(docstring_bstr)
-      helpfile = W.bstr_to_s(helpfile_bstr)
+      helpstring = W.bstr_to_s(docstring_bstr) || '' # C's WC2VSTR(NULL) is '', not nil
+      helpfile = W.bstr_to_s(helpfile_bstr) || ''
       [name_bstr, docstring_bstr, helpfile_bstr].each { |b| W.sys_free_string.call(b) unless b.zero? }
       [name, helpstring, helpcontext_out.unpack1('L'), helpfile]
     end

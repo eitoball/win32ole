@@ -150,6 +150,9 @@ class WIN32OLE
       @size_opt_params = funcdesc.cParamsOpt
       @func_flags = funcdesc.wFuncFlags
       @return_vt = funcdesc.ret_tdesc_vt
+      @return_type_detail = TI.typedesc_details(
+        itypeinfo_ptr, funcdesc_ptr + TI::FUNCDESC.offsetof('ret_tdesc_union_ptr')
+      )
 
       @name, param_names = read_names(itypeinfo_ptr, @memid, funcdesc.cParams)
       @helpstring, @help_context, @helpfile = read_documentation(itypeinfo_ptr, @memid)
@@ -165,7 +168,7 @@ class WIN32OLE
       # spurious nameless Param.
       @params = Array.new(param_names.length) do |i|
         elemdesc_ptr = elemdesc_array_ptr + i * TI::ELEMDESC.size
-        WIN32OLE::Param.new(elemdesc_ptr, param_names[i])
+        WIN32OLE::Param.new(itypeinfo_ptr, elemdesc_ptr, param_names[i])
       end
 
       TI.release_func_desc_fn(itypeinfo_ptr).call(itypeinfo_ptr, funcdesc_ptr)
@@ -177,7 +180,7 @@ class WIN32OLE
     alias to_s name
 
     def return_type
-      TI.vartype_name(@return_vt)
+      @return_type_detail.last
     end
 
     def return_vtype
@@ -185,7 +188,7 @@ class WIN32OLE
     end
 
     def return_type_detail
-      [return_type]
+      @return_type_detail.dup
     end
 
     def invoke_kind
@@ -279,8 +282,8 @@ class WIN32OLE
       name_bstr = name_out.unpack1(W::PACK_PTR)
       docstring_bstr = docstring_out.unpack1(W::PACK_PTR)
       helpfile_bstr = helpfile_out.unpack1(W::PACK_PTR)
-      helpstring = W.bstr_to_s(docstring_bstr)
-      helpfile = W.bstr_to_s(helpfile_bstr)
+      helpstring = W.bstr_to_s(docstring_bstr) || '' # C's WC2VSTR(NULL) is '', not nil
+      helpfile = W.bstr_to_s(helpfile_bstr) || ''
       [name_bstr, docstring_bstr, helpfile_bstr].each { |b| W.sys_free_string.call(b) unless b.zero? }
       [helpstring, helpcontext_out.unpack1('L'), helpfile]
     end

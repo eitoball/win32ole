@@ -23,7 +23,7 @@ class WIN32OLE
       vardesc = TI::VARDESC.new(vardesc_ptr)
 
       @memid = vardesc.memid
-      @vt = vardesc.tdesc_vt
+      @type_detail = TI.typedesc_details(itypeinfo_ptr, vardesc_ptr + TI::VARDESC.offsetof('tdesc_union_ptr'))
       @var_flags = vardesc.wVarFlags
       @varkind = vardesc.varkind
       @value = read_const_value(vardesc, vardesc_ptr) if @varkind == VAR_CONST
@@ -38,11 +38,11 @@ class WIN32OLE
     alias to_s name
 
     def ole_type
-      TI.vartype_name(@vt)
+      @type_detail.last
     end
 
     def ole_type_detail
-      [ole_type]
+      @type_detail.dup
     end
 
     def value

@@ -259,5 +259,54 @@ class TestTypeInfo < Test::Unit::TestCase
     Fiddle.free(vtable) if vtable
     Fiddle.free(obj) if obj
   end
+
+  W = WIN32OLE::Win32
+
+  def fake_typedesc(union, vt)
+    buf = Fiddle::Pointer.malloc(TI::TYPEDESC.size)
+    buf[0, W::PTR_SIZE] = [union].pack(W::PACK_PTR)
+    buf[W::PTR_SIZE, 2] = [vt].pack('S')
+    buf
+  end
+
+  def test_typedesc_details_of_a_scalar
+    td = fake_typedesc(0, 3) # VT_I4
+    assert_equal(['I4'], TI.typedesc_details(0, td.to_i))
+  ensure
+    Fiddle.free(td) if td
+  end
+
+  def test_typedesc_details_follows_ptr_and_safearray
+    inner = fake_typedesc(0, 8) # VT_BSTR
+    sa = fake_typedesc(inner.to_i, 27) # VT_SAFEARRAY -> BSTR
+    ptr = fake_typedesc(sa.to_i, 26) # VT_PTR -> SAFEARRAY
+    assert_equal(%w[PTR SAFEARRAY BSTR], TI.typedesc_details(0, ptr.to_i))
+  ensure
+    [ptr, sa, inner].each { |p| Fiddle.free(p) if p }
+  end
+
+  # Only the low 4 bytes of the TYPEDESC union hold the HREFTYPE for
+  # VT_USERDEFINED; the upper bytes of the pointer-sized slot can be
+  # anything, so they must be masked off before GetRefTypeInfo.
+  def test_typedesc_details_userdefined_masks_hreftype_and_tolerates_failure
+    received = []
+    get_ref = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::DWORD, W::VOIDP], W::STDCALL) do |_this, href, _out|
+      received << href
+      -2147319765 # TYPE_E_ELEMENTNOTFOUND
+    end
+    slots = TI::ITYPEINFO_VTBL[:GetRefTypeInfo] + 1
+    vtable = Fiddle::Pointer.malloc(W::PTR_SIZE * slots)
+    slots.times { |i| vtable[i * W::PTR_SIZE, W::PTR_SIZE] = [0].pack(W::PACK_PTR) }
+    vtable[TI::ITYPEINFO_VTBL[:GetRefTypeInfo] * W::PTR_SIZE, W::PTR_SIZE] = [get_ref.to_i].pack(W::PACK_PTR)
+    obj = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    obj[0, W::PTR_SIZE] = [vtable.to_i].pack(W::PACK_PTR)
+    garbage_high = W::PTR_SIZE == 8 ? 0xDEADBEEF_00000005 : 5
+    td = fake_typedesc(garbage_high, 29) # VT_USERDEFINED
+
+    assert_equal(['USERDEFINED'], TI.typedesc_details(obj.to_i, td.to_i))
+    assert_equal([5], received)
+  ensure
+    [td, obj, vtable].each { |p| Fiddle.free(p) if p }
+  end
 end
 end
