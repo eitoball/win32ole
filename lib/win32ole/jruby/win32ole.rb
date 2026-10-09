@@ -383,6 +383,39 @@ class WIN32OLE
     nil
   end
 
+  # ext/win32ole/win32ole.c's fole_each: gets the collection's enumerator
+  # through DISPID_NEWENUM, QueryInterfaces it for IEnumVARIANT, and yields
+  # each item IEnumVARIANT::Next returns until it stops returning S_OK.
+  def each
+    return to_enum(:each) unless block_given?
+
+    hr, result_bytes, = ole_invoke(W::DISPID_NEWENUM, [], W::DISPATCH_METHOD | W::DISPATCH_PROPERTYGET)
+    if W.failed?(hr)
+      raise WIN32OLE::QueryInterfaceError, "failed to get IEnum Interface\n#{self.class.send(:hresult_detail, hr)}"
+    end
+
+    vt, payload = W.unpack_variant(result_bytes)
+    unknown = [W::VT_UNKNOWN, W::VT_DISPATCH].include?(vt) ? W.unpack_pointer(payload) : 0
+    raise WIN32OLE::QueryInterfaceError, 'failed to get IEnum Interface' if unknown.zero?
+
+    enum = W.query_interface(unknown, W::IID_IENUMVARIANT)
+    self.class.send(:release_com_pointer, unknown)
+    raise WIN32OLE::QueryInterfaceError, 'failed to get IEnum Interface' if enum.nil?
+
+    begin
+      next_fn = W.vtable_function(enum, 3, [W::VOIDP, W::DWORD, W::VOIDP, W::VOIDP], W::LONG)
+      loop do
+        var = ("\x00" * W::VARIANT_SIZE).b
+        break unless next_fn.call(enum, 1, var, nil).zero? # S_OK; S_FALSE (1) = no more
+
+        yield self.class.variant_bytes_to_ruby_value(var)
+      end
+    ensure
+      self.class.send(:release_com_pointer, enum)
+    end
+    nil
+  end
+
   # ext/win32ole/win32ole.c's fole_getproperty_with_bracket: invokes the
   # object's default member (DISPID_VALUE) with the given arguments --
   # e.g. dict['ruby'] on a Scripting.Dictionary, whose default property

@@ -69,5 +69,50 @@ class TestDispatch < Test::Unit::TestCase
     @ole.add(1, 2)
     assert_equal({ dispid: 100, values: [2, 1], named: [] }, @calls.last)
   end
+
+  def fake_object(slots)
+    vtable = Fiddle::Pointer.malloc(W::PTR_SIZE * 7)
+    7.times { |i| vtable[i * W::PTR_SIZE, W::PTR_SIZE] = [0].pack(W::PACK_PTR) }
+    slots.each do |index, (args, ret, body)|
+      closure = Fiddle::Closure::BlockCaller.new(ret, args, W::STDCALL, &body)
+      @closures << closure
+      vtable[index * W::PTR_SIZE, W::PTR_SIZE] = [closure.to_i].pack(W::PACK_PTR)
+    end
+    obj = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    obj[0, W::PTR_SIZE] = [vtable.to_i].pack(W::PACK_PTR)
+    @fakes.push(obj, vtable)
+    obj
+  end
+
+  # _NewEnum (DISPID -4) returns a VT_UNKNOWN whose QueryInterface hands
+  # back an IEnumVARIANT yielding the I4s 10 and 20, then S_FALSE.
+  def test_each_walks_the_new_enum_ienumvariant
+    @fakes = []
+    released = []
+    items = [10, 20]
+    enum = fake_object(
+      0 => [[W::VOIDP, W::VOIDP, W::VOIDP], W::LONG, proc { |this, _riid, ppv| ppv[0, W::PTR_SIZE] = [this.to_i].pack(W::PACK_PTR); 0 }],
+      2 => [[W::VOIDP], W::DWORD, proc { |this| released << this.to_i; 0 }],
+      3 => [[W::VOIDP, W::DWORD, W::VOIDP, W::VOIDP], W::LONG, proc do |_this, _n, var, _fetched|
+        next 1 if items.empty? # S_FALSE
+        var[0, W::VARIANT_SIZE] = W.pack_variant(W::VT_I4, W.pack_i4(items.shift))
+        0
+      end]
+    )
+    newenum = Fiddle::Closure::BlockCaller.new(
+      W::LONG, [W::VOIDP, W::LONG, W::VOIDP, W::DWORD, W::WORD, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL
+    ) do |_this, dispid, _riid, _lcid, _flags, _pdp, result, _excep, _argerr|
+      next -2147352573 unless dispid == -4 # DISP_E_MEMBERNOTFOUND
+      result[0, W::VARIANT_SIZE] = W.pack_variant(W::VT_UNKNOWN, W.pack_pointer(enum.to_i))
+      0
+    end
+    @closures << newenum
+    @vtable[6 * W::PTR_SIZE, W::PTR_SIZE] = [newenum.to_i].pack(W::PACK_PTR)
+
+    assert_equal([10, 20], @ole.each.to_a)
+    assert_equal([enum.to_i, enum.to_i], released) # the _NewEnum result and the QI'd enumerator
+  ensure
+    @fakes&.each { |p| Fiddle.free(p) }
+  end
 end
 end
