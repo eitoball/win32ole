@@ -576,7 +576,11 @@ class WIN32OLE
       return nil if addr.nil? || addr.zero?
 
       len_bytes = Fiddle::Pointer.new(addr - 4)[0, 4].unpack1('L')
-      utf16_to_s(Fiddle::Pointer.new(addr)[0, len_bytes])
+      utf16 = Fiddle::Pointer.new(addr)[0, len_bytes]
+      # Like ole_wc2vstr (strlen after conversion): stop at the first NUL,
+      # which a BSTR's length can include.
+      nul = utf16.unpack('v*').index(0)
+      utf16_to_s(nul ? utf16[0, nul * 2] : utf16)
     end
 
     # For plain NUL-terminated wide strings (LPOLESTR/LPWSTR), unlike BSTR,

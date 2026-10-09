@@ -372,6 +372,18 @@ class TestWin32 < Test::Unit::TestCase
     assert_raise(TypeError) { W.codepage = '65001' }
   end
 
+  # A BSTR's length prefix can include a terminating NUL (typelib help
+  # file names do); ole_wc2vstr's strlen stops at the first NUL.
+  def test_bstr_to_s_stops_at_the_first_nul
+    body = "AB\u0000C".encode('UTF-16LE').b
+    buf = Fiddle::Pointer.malloc(4 + body.bytesize)
+    buf[0, 4] = [body.bytesize].pack('L')
+    buf[4, body.bytesize] = body
+    assert_equal('AB', W.bstr_to_s(buf.to_i + 4))
+  ensure
+    Fiddle.free(buf) if buf
+  end
+
   def test_wstr_appends_a_terminating_nul
     assert_equal("a\x00\x00\x00".b, W.wstr('a'))
   end
