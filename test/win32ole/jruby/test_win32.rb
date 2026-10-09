@@ -342,5 +342,38 @@ class TestWin32 < Test::Unit::TestCase
     minimum = W::PTR_SIZE == 8 ? 48 : 28
     assert_operator(W::MSG_SIZE, :>=, minimum)
   end
+
+  def test_encoding_to_codepage_follows_ext_win32ole_table
+    assert_equal(65001, W.encoding_to_codepage(Encoding::UTF_8))
+    assert_equal(932, W.encoding_to_codepage(Encoding::Windows_31J))
+    assert_equal(51932, W.encoding_to_codepage(Encoding::CP51932))
+    assert_equal(W::CP_ACP, W.encoding_to_codepage(Encoding::US_ASCII)) # not in the table
+  end
+
+  def with_codepage(cp)
+    saved = W.codepage
+    W.codepage = cp
+    yield
+  ensure
+    W.codepage = saved
+  end
+
+  def test_utf16_to_s_tags_the_result_with_the_codepage_encoding
+    utf16 = "あ".encode('UTF-16LE').b
+    with_codepage(W::CP_UTF8) do
+      assert_equal("\xE3\x81\x82".force_encoding('UTF-8'), W.utf16_to_s(utf16))
+    end
+    with_codepage(51932) do
+      assert_equal("\xA4\xA2".force_encoding('CP51932'), W.utf16_to_s(utf16))
+    end
+  end
+
+  def test_codepage_rejects_a_non_integer
+    assert_raise(TypeError) { W.codepage = '65001' }
+  end
+
+  def test_wstr_appends_a_terminating_nul
+    assert_equal("a\x00\x00\x00".b, W.wstr('a'))
+  end
 end
 end

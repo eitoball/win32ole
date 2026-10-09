@@ -24,9 +24,28 @@ class WIN32OLE
   LOCALE_SYSTEM_DEFAULT = W::LOCALE_SYSTEM_DEFAULT
   LOCALE_USER_DEFAULT = W::LOCALE_USER_DEFAULT
 
+  CP_ACP = W::CP_ACP
+  CP_OEMCP = W::CP_OEMCP
+  CP_MACCP = W::CP_MACCP
+  CP_THREAD_ACP = W::CP_THREAD_ACP
+  CP_SYMBOL = W::CP_SYMBOL
+  CP_UTF7 = W::CP_UTF7
+  CP_UTF8 = W::CP_UTF8
+
   @lcid = LOCALE_SYSTEM_DEFAULT
 
   class << self
+    # ext/win32ole/win32ole.c's fole_s_get_code_page / fole_s_set_code_page:
+    # the codepage strings coming back from COM are converted to (initially
+    # derived from Encoding.default_internal || default_external).
+    def codepage
+      W.codepage
+    end
+
+    def codepage=(cp)
+      W.codepage = cp
+    end
+
     def locale
       @lcid
     end

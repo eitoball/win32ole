@@ -56,6 +56,40 @@ class WIN32OLE
     LOCALE_USER_DEFAULT   = 0x0400
     LCID_INSTALLED        = 0x00000001
 
+    CP_ACP        = 0
+    CP_OEMCP      = 1
+    CP_MACCP      = 2
+    CP_THREAD_ACP = 3
+    CP_SYMBOL     = 42
+    CP_UTF7       = 65000
+    CP_UTF8       = 65001
+    CP_EUC_JP_51932 = 51932
+    # set_ole_codepage accepts these even when not "installed".
+    SPECIAL_CODEPAGES = [CP_ACP, CP_OEMCP, CP_MACCP, CP_THREAD_ACP, CP_SYMBOL, CP_UTF7, CP_UTF8, CP_EUC_JP_51932].freeze
+    CODEPAGE_ERROR_MESSAGE = 'codepage should be WIN32OLE::CP_ACP, WIN32OLE::CP_OEMCP, WIN32OLE::CP_MACCP, ' \
+                             'WIN32OLE::CP_THREAD_ACP, WIN32OLE::CP_SYMBOL, WIN32OLE::CP_UTF7, WIN32OLE::CP_UTF8, ' \
+                             'or installed codepage.'
+
+    # ext/win32ole/win32ole.c's ole_encoding2cp table (names compared
+    # case-insensitively); anything else maps to CP_ACP.
+    ENCODING_CODEPAGES = {
+      'big5' => 950, 'cp51932' => 51932, 'cp850' => 850, 'cp852' => 852, 'cp855' => 855, 'cp949' => 949,
+      'euc-jp' => 20932, 'euc-kr' => 51949, 'euc-tw' => 51950, 'gb18030' => 54936, 'gb2312' => 20936,
+      'gbk' => 936, 'ibm437' => 437, 'ibm720' => 720, 'ibm737' => 737, 'ibm775' => 775, 'ibm852' => 852,
+      'ibm855' => 855, 'ibm857' => 857, 'ibm860' => 860, 'ibm861' => 861, 'ibm862' => 862, 'ibm863' => 863,
+      'ibm864' => 864, 'ibm865' => 865, 'ibm866' => 866, 'ibm869' => 869, 'iso-2022-jp' => 50220,
+      'iso-8859-1' => 28591, 'iso-8859-15' => 28605, 'iso-8859-2' => 28592, 'iso-8859-3' => 28593,
+      'iso-8859-4' => 28594, 'iso-8859-5' => 28595, 'iso-8859-6' => 28596, 'iso-8859-7' => 28597,
+      'iso-8859-8' => 28598, 'iso-8859-9' => 28599, 'koi8-r' => 20866, 'koi8-u' => 21866, 'shift_jis' => 932,
+      'utf-16be' => 1201, 'utf-16le' => 1200, 'utf-7' => 65000, 'utf-8' => 65001, 'windows-1250' => 1250,
+      'windows-1251' => 1251, 'windows-1252' => 1252, 'windows-1253' => 1253, 'windows-1254' => 1254,
+      'windows-1255' => 1255, 'windows-1256' => 1256, 'windows-1257' => 1257, 'windows-1258' => 1258,
+      'windows-31j' => 932, 'windows-874' => 874, 'eucjp-ms' => 20932
+    }.freeze
+
+    CPINFOEX_SIZE = 4 + 2 + 12 + 2 + 4 + (260 * 2) # MaxCharSize..CodePage + WCHAR CodePageName[MAX_PATH]
+    CPINFOEX_CODEPAGE_OFFSET = 20
+
     IID_NULL      = ("\x00" * 16).b
     IID_IDISPATCH = [0x00020400, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46].pack('LSSC8')
 
@@ -94,8 +128,76 @@ class WIN32OLE
 
     module_function
 
+    # Ruby -> NUL-terminated UTF-16LE. Like ole_vstr2wc, the string's own
+    # encoding decides the conversion; an encoding Ruby can't transcode
+    # (a dummy one such as "UTF-16", or binary with non-ASCII bytes) falls
+    # back to the ANSI code page, which is what ole_encoding2cp's CP_ACP
+    # default does for encodings outside its table.
     def wstr(str)
-      "#{str}\x00".encode('UTF-16LE').b
+      s = str.is_a?(::String) ? str : str.to_s
+      ansi = s.encoding.dummy? || (s.encoding == Encoding::BINARY && !s.ascii_only?)
+      wide = ansi ? multi_byte_to_wide_char(CP_ACP, s) : s.encode('UTF-16LE').b
+      wide << "\x00\x00".b
+    end
+
+    def encoding_to_codepage(enc)
+      ENCODING_CODEPAGES.fetch(enc.name.downcase, CP_ACP)
+    end
+
+    def codepage
+      init_codepage unless @codepage
+      @codepage
+    end
+
+    # set_ole_codepage. On top of C's checks, the codepage must map to a
+    # Ruby Encoding ("CP<n>", dummy ones included): C defines a dummy
+    # encoding for any that doesn't, which isn't possible from Ruby, and
+    # strings returned from COM have to be tagged with something.
+    def codepage=(cp)
+      raise TypeError, "no implicit conversion of #{cp.class} into Integer" unless cp.is_a?(::Integer)
+      unless SPECIAL_CODEPAGES.include?(cp) || is_valid_code_page.call(cp) != 0
+        raise WIN32OLE::RuntimeError, CODEPAGE_ERROR_MESSAGE
+      end
+
+      real = real_codepage(cp)
+      enc = begin
+        Encoding.find("CP#{real}")
+      rescue ArgumentError
+        raise WIN32OLE::RuntimeError, "#{CODEPAGE_ERROR_MESSAGE} (no Ruby encoding for CP#{real})"
+      end
+      @codepage = cp
+      @codepage_encoding = enc
+      @real_codepage = real
+    end
+
+    def init_codepage
+      self.codepage = encoding_to_codepage(Encoding.default_internal || Encoding.default_external)
+    end
+
+    # ole_cp2encoding's mapping of the pseudo codepages to a real one.
+    def real_codepage(cp)
+      case cp
+      when CP_ACP then get_acp.call
+      when CP_OEMCP then get_oemcp.call
+      when CP_MACCP, CP_THREAD_ACP
+        info = ("\x00" * CPINFOEX_SIZE).b
+        raise WIN32OLE::RuntimeError, 'cannot map codepage to encoding.' if get_cp_info_ex.call(cp, 0, info).zero?
+
+        info[CPINFOEX_CODEPAGE_OFFSET, 4].unpack1('L')
+      else cp
+      end
+    end
+
+    # UTF-16LE bytes -> a String in WIN32OLE.codepage, the way ole_wc2vstr
+    # tags COM strings with cWIN32OLE_enc. Unconvertible characters become
+    # '?', as WideCharToMultiByte's default character does.
+    def utf16_to_s(utf16)
+      init_codepage unless @codepage
+      if @codepage_encoding.dummy?
+        wide_char_to_multi_byte(@real_codepage, utf16).force_encoding(@codepage_encoding)
+      else
+        utf16.dup.force_encoding('UTF-16LE').encode(@codepage_encoding, invalid: :replace, undef: :replace)
+      end
     end
 
     def pack_variant(vt, body)
@@ -240,6 +342,60 @@ class WIN32OLE
 
     def kernel32
       @kernel32 ||= Fiddle.dlopen('kernel32')
+    end
+
+    def is_valid_code_page
+      @is_valid_code_page ||= Fiddle::Function.new(kernel32['IsValidCodePage'], [DWORD], DWORD, STDCALL)
+    end
+
+    def get_acp
+      @get_acp ||= Fiddle::Function.new(kernel32['GetACP'], [], DWORD, STDCALL)
+    end
+
+    def get_oemcp
+      @get_oemcp ||= Fiddle::Function.new(kernel32['GetOEMCP'], [], DWORD, STDCALL)
+    end
+
+    def get_cp_info_ex
+      @get_cp_info_ex ||= Fiddle::Function.new(kernel32['GetCPInfoExW'], [DWORD, DWORD, VOIDP], DWORD, STDCALL)
+    end
+
+    def multi_byte_to_wide_char_fn
+      @multi_byte_to_wide_char_fn ||= Fiddle::Function.new(
+        kernel32['MultiByteToWideChar'], [DWORD, DWORD, VOIDP, LONG, VOIDP, LONG], LONG, STDCALL
+      )
+    end
+
+    def wide_char_to_multi_byte_fn
+      @wide_char_to_multi_byte_fn ||= Fiddle::Function.new(
+        kernel32['WideCharToMultiByte'], [DWORD, DWORD, VOIDP, LONG, VOIDP, LONG, VOIDP, VOIDP], LONG, STDCALL
+      )
+    end
+
+    # Returns UTF-16LE bytes (no terminator).
+    def multi_byte_to_wide_char(cp, str)
+      bytes = str.b
+      return ''.b if bytes.empty?
+
+      count = multi_byte_to_wide_char_fn.call(cp, 0, bytes, bytes.bytesize, nil, 0)
+      raise WIN32OLE::RuntimeError, "fail to convert CP#{cp} to Unicode" if count.zero?
+
+      out = ("\x00" * (count * 2)).b
+      multi_byte_to_wide_char_fn.call(cp, 0, bytes, bytes.bytesize, out, count)
+      out
+    end
+
+    # UTF-16LE bytes in, codepage bytes (binary String) out.
+    def wide_char_to_multi_byte(cp, utf16)
+      chars = utf16.bytesize / 2
+      return ''.b if chars.zero?
+
+      size = wide_char_to_multi_byte_fn.call(cp, 0, utf16, chars, nil, 0, nil, nil)
+      raise WIN32OLE::RuntimeError, "fail to convert Unicode to CP#{cp}" if size.zero?
+
+      out = ("\x00" * size).b
+      wide_char_to_multi_byte_fn.call(cp, 0, utf16, chars, out, size, nil, nil)
+      out
     end
 
     def expand_environment_strings_fn
@@ -418,7 +574,7 @@ class WIN32OLE
       return nil if addr.nil? || addr.zero?
 
       len_bytes = Fiddle::Pointer.new(addr - 4)[0, 4].unpack1('L')
-      Fiddle::Pointer.new(addr)[0, len_bytes].dup.force_encoding('UTF-16LE').encode('UTF-8')
+      utf16_to_s(Fiddle::Pointer.new(addr)[0, len_bytes])
     end
 
     # For plain NUL-terminated wide strings (LPOLESTR/LPWSTR), unlike BSTR,
@@ -430,7 +586,7 @@ class WIN32OLE
       ptr = Fiddle::Pointer.new(addr)
       len = 0
       len += 1 while ptr[len * 2, 2].unpack1('S') != 0
-      ptr[0, len * 2].dup.force_encoding('UTF-16LE').encode('UTF-8')
+      utf16_to_s(ptr[0, len * 2])
     end
 
     def hresult_system_message(hr)
