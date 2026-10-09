@@ -184,15 +184,43 @@ class WIN32OLE
       format('{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}', d1, d2, d3, *d4)
     end
 
-    def const_load(ole, mod)
-      ole.ole_type.ole_typelib.ole_types.each do |type|
-        type.variables.each do |var|
-          next unless var.variable_kind == 'CONSTANT'
-          next if mod.const_defined?(var.name, false)
+    # ext/win32ole/win32ole.c's fole_s_const_load / ole_const_load. +ole+ is
+    # a WIN32OLE (its containing typelib) or a String naming a typelib the
+    # way typelib_file resolves it; +mod+ defaults to WIN32OLE itself. Like
+    # C, each visible constant's first letter is ASCII-upcased
+    # (ssfWINDOWS -> SsfWINDOWS); names that still aren't valid constant
+    # names go into a CONSTANTS hash on +mod+ instead.
+    def const_load(ole, mod = nil)
+      raise TypeError, '2nd parameter must be Class or Module' unless mod.nil? || mod.is_a?(::Module)
 
-          mod.const_set(var.name, var.value)
+      mod ||= self
+      tlib =
+        case ole
+        when WIN32OLE then ole.ole_type.ole_typelib
+        when ::String
+          ptr = WIN32OLE::TypeLib.load_typelib(WIN32OLE::TypeLib.file_for(ole) || ole)
+          raise WIN32OLE::RuntimeError, 'failed to LoadTypeLibEx' if ptr.nil?
+
+          WIN32OLE::TypeLib.from_itypelib_ptr(ptr)
+        else
+          raise TypeError, '1st parameter must be WIN32OLE instance'
+        end
+
+      constants = {}
+      tlib.ole_types.each do |type|
+        type.variables.each do |var|
+          next unless var.variable_kind == 'CONSTANT' && var.visible?
+
+          name = var.name.dup
+          name[0] = name[0].upcase(:ascii)
+          if name.match?(/\A[A-Z]\w*\z/)
+            mod.const_set(name, var.value) unless mod.const_defined?(name, false)
+          else
+            constants[name] = var.value
+          end
         end
       end
+      mod.const_set(:CONSTANTS, constants)
       nil
     end
 
