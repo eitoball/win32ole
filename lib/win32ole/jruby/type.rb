@@ -233,16 +233,32 @@ class WIN32OLE
       impl_ole_types(TI::IMPLTYPEFLAG_FDEFAULT)
     end
 
+    # foletype_s_ole_classes (obsolete in C too)
     def self.ole_classes(typelib)
-      raise NotImplementedError, 'registry enumeration is not implemented yet (Phase 2 non-goal)'
+      WIN32OLE::TypeLib.new(typelib).ole_types
     end
 
+    # foletype_s_typelibs (obsolete in C too)
     def self.typelibs
-      raise NotImplementedError, 'registry enumeration is not implemented yet (Phase 2 non-goal)'
+      WIN32OLE::TypeLib.typelibs.map(&:name)
     end
 
+    # foletype_s_progids: the ProgID and VersionIndependentProgID of every
+    # HKCR\CLSID entry that has them.
     def self.progids
-      raise NotImplementedError, 'registry enumeration is not implemented yet (Phase 2 non-goal)'
+      tl = WIN32OLE::TypeLib
+      progids = []
+      tl.with_reg_subkey(TI::HKEY_CLASSES_ROOT, 'CLSID') do |hclsids|
+        tl.each_reg_subkey_name(hclsids) do |clsid|
+          tl.with_reg_subkey(hclsids, clsid) do |hclsid|
+            %w[ProgID VersionIndependentProgID].each do |key|
+              progid = tl.with_reg_subkey(hclsid, key) { |hkey| tl.reg_default_string_value(hkey) }
+              progids << progid if progid
+            end
+          end
+        end
+      end
+      progids
     end
 
     private

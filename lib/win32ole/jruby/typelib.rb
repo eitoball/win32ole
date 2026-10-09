@@ -175,8 +175,41 @@ class WIN32OLE
       "#<WIN32OLE::TypeLib:#{name}>"
     end
 
+    alias ole_classes ole_types
+
+    # ext/win32ole/win32ole_typelib.c's foletypelib_s_typelibs: every
+    # HKCR\TypeLib\{guid}\{version} with a registered name whose file
+    # LoadTypeLibEx can open.
     def self.typelibs
-      raise NotImplementedError, 'registry enumeration is not implemented yet (Phase 2 non-goal)'
+      tlibs = []
+      with_reg_subkey(TI::HKEY_CLASSES_ROOT, 'TypeLib') do |htypelib|
+        each_reg_subkey_name(htypelib) do |guid|
+          with_reg_subkey(htypelib, guid) do |hguid|
+            each_reg_subkey_name(hguid) do |version|
+              next unless with_reg_subkey(hguid, version) { |hversion| reg_default_string_value(hversion) }
+
+              file = file_under_version_key(hguid, version)
+              ptr = file && load_typelib(file)
+              next unless ptr
+
+              begin
+                tlibs << from_itypelib_ptr(ptr)
+              rescue WIN32OLE::QueryInterfaceError
+                # unreadable TLIBATTR; its finalizer still releases ptr
+              end
+            end
+          end
+        end
+      end
+      tlibs
+    end
+
+    def self.each_reg_subkey_name(hkey)
+      i = 0
+      while (name = TI.reg_enum_key(hkey, i))
+        i += 1
+        yield name
+      end
     end
 
     # Mirrors ext/win32ole/win32ole_typelib.c's typelib_file: resolves a
