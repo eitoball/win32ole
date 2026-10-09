@@ -1,0 +1,73 @@
+# test/win32ole/jruby/test_dispatch.rb
+require 'test/unit'
+
+if RUBY_ENGINE == 'jruby'
+require 'win32ole/jruby/win32ole'
+
+class TestDispatch < Test::Unit::TestCase
+  W = WIN32OLE::Win32
+
+  # A fake IDispatch: GetIDsOfNames hands out 100, 101, 102... in name
+  # order and records the names; Invoke records the DISPPARAMS it got and
+  # returns VT_EMPTY.
+  def setup
+    @names = []
+    @calls = []
+    names = @names
+    calls = @calls
+    get_ids = Fiddle::Closure::BlockCaller.new(
+      W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP, W::DWORD, W::DWORD, W::VOIDP], W::STDCALL
+    ) do |_this, _riid, rgsz, count, _lcid, out|
+      ptrs = Fiddle::Pointer.new(rgsz.to_i)[0, count * W::PTR_SIZE].unpack("#{W::PACK_PTR}*")
+      names << ptrs.map { |p| W.wstr_to_s(p) }
+      Fiddle::Pointer.new(out.to_i)[0, count * 4] = (100...(100 + count)).to_a.pack('l*')
+      0
+    end
+    invoke = Fiddle::Closure::BlockCaller.new(
+      W::LONG,
+      [W::VOIDP, W::LONG, W::VOIDP, W::DWORD, W::WORD, W::VOIDP, W::VOIDP, W::VOIDP, W::VOIDP],
+      W::STDCALL
+    ) do |_this, dispid, _riid, _lcid, _flags, pdp, _result, _excep, _argerr|
+      rgvarg, rgnamed, cargs, cnamed = Fiddle::Pointer.new(pdp.to_i)[0, W::PTR_SIZE * 2 + 8]
+                                                    .unpack("#{W::PACK_PTR}#{W::PACK_PTR}LL")
+      values = Array.new(cargs) do |i|
+        _vt, payload = W.unpack_variant(Fiddle::Pointer.new(rgvarg + i * W::VARIANT_SIZE)[0, W::VARIANT_SIZE])
+        W.unpack_i4(payload)
+      end
+      named = cnamed.zero? ? [] : Fiddle::Pointer.new(rgnamed)[0, cnamed * 4].unpack('l*')
+      calls << { dispid: dispid, values: values, named: named }
+      0
+    end
+    @closures = [get_ids, invoke]
+    @vtable = Fiddle::Pointer.malloc(W::PTR_SIZE * 7)
+    7.times { |i| @vtable[i * W::PTR_SIZE, W::PTR_SIZE] = [0].pack(W::PACK_PTR) }
+    @vtable[5 * W::PTR_SIZE, W::PTR_SIZE] = [get_ids.to_i].pack(W::PACK_PTR)
+    @vtable[6 * W::PTR_SIZE, W::PTR_SIZE] = [invoke.to_i].pack(W::PACK_PTR)
+    @obj = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    @obj[0, W::PTR_SIZE] = [@vtable.to_i].pack(W::PACK_PTR)
+    @ole = WIN32OLE.allocate # no finalizer: the fake has no Release
+    @ole.instance_variable_set(:@ptr, @obj.to_i)
+  end
+
+  def teardown
+    Fiddle.free(@obj) if @obj
+    Fiddle.free(@vtable) if @vtable
+  end
+
+  def test_trailing_hash_becomes_named_arguments_ahead_of_reversed_positionals
+    @ole.getDetailsOf(7, 8, { iColumn: 1, 'vItem' => 2 })
+
+    assert_equal([%w[getDetailsOf], %w[getDetailsOf iColumn vItem]], @names)
+    assert_equal({ dispid: 100, values: [1, 2, 8, 7], named: [101, 102] }, @calls.last)
+  end
+
+  def test_named_argument_keys_must_be_strings_or_symbols
+    assert_raise(TypeError) { @ole.getDetailsOf({ 1 => 2 }) }
+  end
+
+  def test_no_hash_means_no_named_arguments
+    @ole.add(1, 2)
+    assert_equal({ dispid: 100, values: [2, 1], named: [] }, @calls.last)
+  end
+end
+end

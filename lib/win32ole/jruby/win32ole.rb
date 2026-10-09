@@ -303,7 +303,9 @@ class WIN32OLE
       return super(name, *args)
     end
 
-    hr, result_bytes, excepinfo_bytes = ole_invoke(dispid, args, plan[:wflags], named_put: plan[:named_put])
+    args, named_args = split_named_args(plan[:name], args) unless plan[:named_put]
+    hr, result_bytes, excepinfo_bytes =
+      ole_invoke(dispid, args, plan[:wflags], named_put: plan[:named_put], named_args: named_args)
 
     if W.failed?(hr)
       detail = error_detail(hr, excepinfo_bytes)
@@ -331,7 +333,9 @@ class WIN32OLE
     dispid = dispid_for(name.to_s)
     return super if dispid.nil?
 
-    hr, result_bytes, excepinfo_bytes = ole_invoke(dispid, args, W::DISPATCH_METHOD | W::DISPATCH_PROPERTYGET)
+    args, named_args = split_named_args(name.to_s, args)
+    hr, result_bytes, excepinfo_bytes =
+      ole_invoke(dispid, args, W::DISPATCH_METHOD | W::DISPATCH_PROPERTYGET, named_args: named_args)
 
     if W.failed?(hr)
       raise WIN32OLE::RuntimeError, W.method_error_message(name, error_detail(hr, excepinfo_bytes))
