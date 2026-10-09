@@ -145,17 +145,90 @@ class WIN32OLE
 
       ref_ptr = ref_out.unpack1(W::PACK_PTR)
       begin
-        name_out = ("\x00" * W::PTR_SIZE).b
-        hr = documentation_fn_for_typeinfo(ref_ptr).call(ref_ptr, MEMBERID_NIL, name_out, nil, nil, nil)
-        return nil if W.failed?(hr)
-
-        bstr = name_out.unpack1(W::PACK_PTR)
-        name = W.bstr_to_s(bstr)
-        W.sys_free_string.call(bstr) unless bstr.zero?
-        name
+        type_name(ref_ptr)
       ensure
-        W.vtable_function(ref_ptr, 2, [W::VOIDP], W::DWORD).call(ref_ptr)
+        release(ref_ptr)
       end
+    end
+
+    # The type's own name (GetDocumentation(MEMBERID_NIL)), or nil.
+    def type_name(itypeinfo_ptr)
+      member_name(itypeinfo_ptr, MEMBERID_NIL)
+    end
+
+    def member_name(itypeinfo_ptr, memid)
+      name_out = ("\x00" * W::PTR_SIZE).b
+      hr = documentation_fn_for_typeinfo(itypeinfo_ptr).call(itypeinfo_ptr, memid, name_out, nil, nil, nil)
+      return nil if W.failed?(hr)
+
+      bstr = name_out.unpack1(W::PACK_PTR)
+      name = W.bstr_to_s(bstr)
+      W.sys_free_string.call(bstr) unless bstr.zero?
+      name
+    end
+
+    def release(iunknown_ptr)
+      W.vtable_function(iunknown_ptr, 2, [W::VOIDP], W::DWORD).call(iunknown_ptr)
+    end
+
+    TKIND_COCLASS = 5
+    IMPLTYPEFLAG_FDEFAULT = 0x1
+    IMPLTYPEFLAG_FSOURCE = 0x2
+
+    # Reads one TYPEATTR field (:typekind, :cFuncs, :cVars, :cImplTypes...),
+    # or nil if GetTypeAttr fails.
+    def type_attr_value(itypeinfo_ptr, field)
+      attr_out = ("\x00" * W::PTR_SIZE).b
+      return nil if W.failed?(type_attr_fn(itypeinfo_ptr).call(itypeinfo_ptr, attr_out))
+
+      attr_ptr = attr_out.unpack1(W::PACK_PTR)
+      value = TYPEATTR.new(attr_ptr).send(field)
+      release_type_attr_fn(itypeinfo_ptr).call(itypeinfo_ptr, attr_ptr)
+      value
+    end
+
+    # Yields [impl_type_flags, ref_itypeinfo_ptr] for each implemented type
+    # of itypeinfo_ptr, skipping ones whose flags or ITypeInfo can't be
+    # read, the same loop ole_type_impl_ole_types / ole_methods_from_typeinfo
+    # use. The block owns ref_itypeinfo_ptr: it must release it or hand
+    # it to something that will.
+    def each_impl_type(itypeinfo_ptr)
+      (type_attr_value(itypeinfo_ptr, :cImplTypes) || 0).times do |i|
+        flags_out = ("\x00" * 4).b
+        next if W.failed?(impl_type_flags_fn(itypeinfo_ptr).call(itypeinfo_ptr, i, flags_out))
+
+        href_out = ("\x00" * 4).b
+        next if W.failed?(ref_type_of_impl_type_fn(itypeinfo_ptr).call(itypeinfo_ptr, i, href_out))
+
+        ref_out = ("\x00" * W::PTR_SIZE).b
+        next if W.failed?(ref_type_info_fn(itypeinfo_ptr).call(itypeinfo_ptr, href_out.unpack1('L'), ref_out))
+
+        yield flags_out.unpack1('l'), ref_out.unpack1(W::PACK_PTR)
+      end
+    end
+
+    # ext/win32ole/win32ole_method.c's ole_method_event: true if owner_ptr
+    # is a coclass and one of its source interfaces has, at method_index, a
+    # function named method_name.
+    def method_event?(owner_ptr, method_index, method_name)
+      return false unless type_attr_value(owner_ptr, :typekind) == TKIND_COCLASS
+
+      each_impl_type(owner_ptr) do |flags, ref_ptr|
+        begin
+          next if (flags & IMPLTYPEFLAG_FSOURCE).zero?
+
+          funcdesc_out = ("\x00" * W::PTR_SIZE).b
+          next if W.failed?(func_desc_fn(ref_ptr).call(ref_ptr, method_index, funcdesc_out))
+
+          funcdesc_ptr = funcdesc_out.unpack1(W::PACK_PTR)
+          memid = FUNCDESC.new(funcdesc_ptr).memid
+          release_func_desc_fn(ref_ptr).call(ref_ptr, funcdesc_ptr)
+          return true if member_name(ref_ptr, memid) == method_name
+        ensure
+          release(ref_ptr)
+        end
+      end
+      false
     end
 
     def invoke_kind_name(invkind)

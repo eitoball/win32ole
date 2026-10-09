@@ -186,9 +186,21 @@ class WIN32OLE
       Array.new(count) { |i| WIN32OLE::Variable.from_typeinfo_ptr(@ptr, i) }
     end
 
+    # ole_methods_from_typeinfo: the type's own functions, then (one level)
+    # those of every type it implements -- a coclass such as "Shell" has
+    # none of its own.
     def ole_methods
-      count = type_attr_func_count
-      Array.new(count) { |i| WIN32OLE::Method.from_typeinfo_ptr(@ptr, i) }
+      methods = Array.new(type_attr_func_count) { |i| WIN32OLE::Method.from_typeinfo_ptr(@ptr, i) }
+      TI.each_impl_type(@ptr) do |_flags, ref_ptr|
+        begin
+          (TI.type_attr_value(ref_ptr, :cFuncs) || 0).times do |i|
+            methods << WIN32OLE::Method.from_typeinfo_ptr(ref_ptr, i, @ptr)
+          end
+        ensure
+          TI.release(ref_ptr)
+        end
+      end
+      methods
     end
 
     def ole_typelib
@@ -206,19 +218,19 @@ class WIN32OLE
     end
 
     def implemented_ole_types
-      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+      impl_ole_types(0)
     end
 
     def source_ole_types
-      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+      impl_ole_types(TI::IMPLTYPEFLAG_FSOURCE)
     end
 
     def default_event_sources
-      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+      impl_ole_types(TI::IMPLTYPEFLAG_FSOURCE | TI::IMPLTYPEFLAG_FDEFAULT)
     end
 
     def default_ole_types
-      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+      impl_ole_types(TI::IMPLTYPEFLAG_FDEFAULT)
     end
 
     def self.ole_classes(typelib)
@@ -234,6 +246,26 @@ class WIN32OLE
     end
 
     private
+
+    # ole_type_impl_ole_types: implemented types whose IMPLTYPEFLAGs include
+    # all of +implflags+. A matching ref ITypeInfo* is handed to the new
+    # Type (whose finalizer releases it); the rest are released here.
+    def impl_ole_types(implflags)
+      types = []
+      TI.each_impl_type(@ptr) do |flags, ref_ptr|
+        if (flags & implflags) == implflags
+          begin
+            types << Type.from_typeinfo_ptr(ref_ptr)
+          rescue WIN32OLE::QueryInterfaceError
+            # like ole_type_from_itypeinfo returning nil: skip it (the
+            # Type's finalizer, installed first, still releases ref_ptr)
+          end
+        else
+          TI.release(ref_ptr)
+        end
+      end
+      types
+    end
 
     def type_attr_func_count
       attr_out = ("\x00" * W::PTR_SIZE).b

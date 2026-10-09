@@ -23,18 +23,23 @@ class WIN32OLE
       raise TypeError, '1st argument should be WIN32OLE::Type object' unless oletype.is_a?(WIN32OLE::Type)
 
       method = check_string!(method)
-      itypeinfo_ptr, index, owned = find_func_index(oletype.itypeinfo_ptr, method)
-      raise WIN32OLE::RuntimeError, "not found #{method}" if itypeinfo_ptr.nil?
+      owner_ptr = oletype.itypeinfo_ptr
+      index = func_index_in(owner_ptr, method)
+      return from_typeinfo_ptr(owner_ptr, index) if index
 
-      begin
-        from_typeinfo_ptr(itypeinfo_ptr, index)
-      ensure
-        # itypeinfo_ptr came from GetRefTypeInfo (an implemented type, not
-        # oletype's own) when owned is true -- initialize only ever reads
-        # from it synchronously and never retains it, so it's safe (and,
-        # since nothing else will, necessary) to release it right here.
-        W.vtable_function(itypeinfo_ptr, 2, [W::VOIDP], W::DWORD).call(itypeinfo_ptr) if owned
+      # ole_method_sub(self, pTypeInfo, pRefTypeInfo, ...): a match on an
+      # implemented type records oletype as the owner (for #event?).
+      # initialize only reads ref_ptr synchronously, so it is released here
+      # either way.
+      TI.each_impl_type(owner_ptr) do |_flags, ref_ptr|
+        begin
+          ref_index = func_index_in(ref_ptr, method)
+          return from_typeinfo_ptr(ref_ptr, ref_index, owner_ptr) if ref_index
+        ensure
+          TI.release(ref_ptr)
+        end
       end
+      raise WIN32OLE::RuntimeError, "not found #{method}"
     end
 
     def self.check_string!(val)
@@ -45,39 +50,10 @@ class WIN32OLE
     end
     private_class_method :check_string!
 
-    # Returns [itypeinfo_ptr, index, owned] for the first FUNCDESC (own or,
-    # per ole_method_sub/olemethod_from_typeinfo, one level of implemented
-    # types) whose name matches case-insensitively, or [nil, nil, false].
-    # owned is true when itypeinfo_ptr is a fresh GetRefTypeInfo reference
-    # (an implemented type) the caller must release; false when it's
-    # oletype's own, borrowed pointer.
-    def self.find_func_index(itypeinfo_ptr, name)
-      index = func_index_in(itypeinfo_ptr, name)
-      return [itypeinfo_ptr, index, false] if index
-
-      impl_type_count(itypeinfo_ptr).times do |i|
-        ref_ptr = impl_type_ref_typeinfo(itypeinfo_ptr, i)
-        next if ref_ptr.nil?
-
-        ref_index = func_index_in(ref_ptr, name)
-        return [ref_ptr, ref_index, true] if ref_index
-
-        W.vtable_function(ref_ptr, 2, [W::VOIDP], W::DWORD).call(ref_ptr)
-      end
-      [nil, nil, false]
-    end
-    private_class_method :find_func_index
-
+    # Index of the FUNCDESC in itypeinfo_ptr whose name matches
+    # case-insensitively, or nil.
     def self.func_index_in(itypeinfo_ptr, name)
-      attr_out = ("\x00" * W::PTR_SIZE).b
-      hr = TI.type_attr_fn(itypeinfo_ptr).call(itypeinfo_ptr, attr_out)
-      return nil if W.failed?(hr)
-
-      attr_ptr = attr_out.unpack1(W::PACK_PTR)
-      count = TI::TYPEATTR.new(attr_ptr).cFuncs
-      TI.release_type_attr_fn(itypeinfo_ptr).call(itypeinfo_ptr, attr_ptr)
-
-      count.times do |i|
+      (TI.type_attr_value(itypeinfo_ptr, :cFuncs) || 0).times do |i|
         funcdesc_out = ("\x00" * W::PTR_SIZE).b
         next if W.failed?(TI.func_desc_fn(itypeinfo_ptr).call(itypeinfo_ptr, i, funcdesc_out))
 
@@ -85,55 +61,20 @@ class WIN32OLE
         memid = TI::FUNCDESC.new(funcdesc_ptr).memid
         TI.release_func_desc_fn(itypeinfo_ptr).call(itypeinfo_ptr, funcdesc_ptr)
 
-        fname, = read_documentation_name(itypeinfo_ptr, memid)
+        fname = TI.member_name(itypeinfo_ptr, memid)
         return i if fname && fname.casecmp?(name)
       end
       nil
     end
     private_class_method :func_index_in
 
-    def self.impl_type_count(itypeinfo_ptr)
-      attr_out = ("\x00" * W::PTR_SIZE).b
-      hr = TI.type_attr_fn(itypeinfo_ptr).call(itypeinfo_ptr, attr_out)
-      return 0 if W.failed?(hr)
-
-      attr_ptr = attr_out.unpack1(W::PACK_PTR)
-      count = TI::TYPEATTR.new(attr_ptr).cImplTypes
-      TI.release_type_attr_fn(itypeinfo_ptr).call(itypeinfo_ptr, attr_ptr)
-      count
-    end
-    private_class_method :impl_type_count
-
-    def self.impl_type_ref_typeinfo(itypeinfo_ptr, index)
-      href_out = ("\x00" * 4).b
-      hr = TI.ref_type_of_impl_type_fn(itypeinfo_ptr).call(itypeinfo_ptr, index, href_out)
-      return nil if W.failed?(hr)
-
-      ref_out = ("\x00" * W::PTR_SIZE).b
-      hr = TI.ref_type_info_fn(itypeinfo_ptr).call(itypeinfo_ptr, href_out.unpack1('L'), ref_out)
-      return nil if W.failed?(hr)
-
-      ref_out.unpack1(W::PACK_PTR)
-    end
-    private_class_method :impl_type_ref_typeinfo
-
-    def self.read_documentation_name(itypeinfo_ptr, memid)
-      name_out = ("\x00" * W::PTR_SIZE).b
-      hr = TI.documentation_fn_for_typeinfo(itypeinfo_ptr).call(itypeinfo_ptr, memid, name_out, nil, nil, nil)
-      return [nil] if W.failed?(hr)
-
-      name_bstr = name_out.unpack1(W::PACK_PTR)
-      name = W.bstr_to_s(name_bstr)
-      W.sys_free_string.call(name_bstr) unless name_bstr.zero?
-      [name]
-    end
-    private_class_method :read_documentation_name
-
-    def self.from_typeinfo_ptr(itypeinfo_ptr, index)
-      allocate.tap { |method| method.send(:initialize, itypeinfo_ptr, index) }
+    # owner_ptr is the coclass whose implemented type itypeinfo_ptr is
+    # (olemethoddata's pOwnerTypeInfo), or nil for a type's own function.
+    def self.from_typeinfo_ptr(itypeinfo_ptr, index, owner_ptr = nil)
+      allocate.tap { |method| method.send(:initialize, itypeinfo_ptr, index, owner_ptr) }
     end
 
-    def initialize(itypeinfo_ptr, index)
+    def initialize(itypeinfo_ptr, index, owner_ptr = nil)
       funcdesc_out = ("\x00" * W::PTR_SIZE).b
       hr = TI.func_desc_fn(itypeinfo_ptr).call(itypeinfo_ptr, index, funcdesc_out)
       if W.failed?(hr)
@@ -155,6 +96,10 @@ class WIN32OLE
       )
 
       @name, param_names = read_names(itypeinfo_ptr, @memid, funcdesc.cParams)
+      # folemethod_event / folemethod_event_interface, computed now because
+      # neither ITypeInfo* is retained past construction.
+      @event = owner_ptr ? TI.method_event?(owner_ptr, index, @name) : false
+      @event_interface = @event ? TI.type_name(itypeinfo_ptr) : nil
       @helpstring, @help_context, @helpfile = read_documentation(itypeinfo_ptr, @memid)
 
       # lprgelemdescParam is a POINTER FIELD inside FUNCDESC — its value is
@@ -240,11 +185,11 @@ class WIN32OLE
     end
 
     def event?
-      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+      @event
     end
 
     def event_interface
-      raise NotImplementedError, 'ImplType traversal is not implemented yet (Phase 2 non-goal)'
+      @event_interface
     end
 
     private

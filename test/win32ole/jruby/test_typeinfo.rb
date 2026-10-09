@@ -308,5 +308,41 @@ class TestTypeInfo < Test::Unit::TestCase
   ensure
     [td, obj, vtable].each { |p| Fiddle.free(p) if p }
   end
+
+  # A fake ITypeInfo with two implemented types (flags 0x1 and 0x2) whose
+  # GetRefTypeInfo hands back distinct fake pointers (0x1000 + href);
+  # implemented type #1's GetRefTypeOfImplType fails and must be skipped.
+  def test_each_impl_type_yields_flags_and_ref_pointers
+    keep = []
+    slot = TI::ITYPEINFO_VTBL
+    attr = Fiddle::Pointer.malloc(TI::TYPEATTR.size)
+    attr[0, TI::TYPEATTR.size] = ("\x00" * TI::TYPEATTR.size).b
+    attr[TI::TYPEATTR.offsetof('cImplTypes'), 2] = [3].pack('S')
+    closures = {
+      slot[:GetTypeAttr] => [[W::VOIDP, W::VOIDP], W::LONG, proc { |_t, out| out[0, W::PTR_SIZE] = [attr.to_i].pack(W::PACK_PTR); 0 }],
+      slot[:ReleaseTypeAttr] => [[W::VOIDP, W::VOIDP], W::VOID, proc { |*| nil }],
+      slot[:GetImplTypeFlags] => [[W::VOIDP, W::DWORD, W::VOIDP], W::LONG, proc { |_t, i, out| out[0, 4] = [i + 1].pack('l'); 0 }],
+      slot[:GetRefTypeOfImplType] => [[W::VOIDP, W::DWORD, W::VOIDP], W::LONG,
+                                      proc { |_t, i, out| next(-1) if i == 1; out[0, 4] = [i].pack('L'); 0 }],
+      slot[:GetRefTypeInfo] => [[W::VOIDP, W::DWORD, W::VOIDP], W::LONG,
+                                proc { |_t, href, out| out[0, W::PTR_SIZE] = [0x1000 + href].pack(W::PACK_PTR); 0 }]
+    }
+    slots = slot.values.max + 1
+    vtable = Fiddle::Pointer.malloc(W::PTR_SIZE * slots)
+    slots.times { |i| vtable[i * W::PTR_SIZE, W::PTR_SIZE] = [0].pack(W::PACK_PTR) }
+    closures.each do |index, (args, ret, body)|
+      c = Fiddle::Closure::BlockCaller.new(ret, args, W::STDCALL, &body)
+      keep << c
+      vtable[index * W::PTR_SIZE, W::PTR_SIZE] = [c.to_i].pack(W::PACK_PTR)
+    end
+    obj = Fiddle::Pointer.malloc(W::PTR_SIZE)
+    obj[0, W::PTR_SIZE] = [vtable.to_i].pack(W::PACK_PTR)
+
+    yielded = []
+    TI.each_impl_type(obj.to_i) { |flags, ref| yielded << [flags, ref] }
+    assert_equal([[1, 0x1000], [3, 0x1002]], yielded)
+  ensure
+    [obj, vtable, attr].each { |p| Fiddle.free(p) if p }
+  end
 end
 end
