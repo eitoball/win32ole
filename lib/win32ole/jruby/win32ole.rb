@@ -128,6 +128,8 @@ class WIN32OLE
           W.pack_pointer(bstr)
         when :dispatch
           W.pack_pointer(value.instance_variable_get(:@ptr))
+        when :date
+          W.pack_r8(W.time_to_vtdate(value))
         end
       W.pack_variant(W::VT_FOR_TYPE.fetch(type), payload)
     end
@@ -166,15 +168,30 @@ class WIN32OLE
       when :uint then W.unpack_uint(payload)
       when :r4 then W.unpack_r4(payload)
       when :error then W.unpack_error(payload)
+      when :date then W.vtdate_to_time(W.unpack_r8(payload))
       when :bstr
         addr = W.unpack_pointer(payload)
-        str = W.bstr_to_s(addr)
+        str = W.bstr_to_s(addr) || '' # a NULL BSTR is "", as in ole_variant2val
         W.sys_free_string.call(addr) unless addr.zero?
         str
       when :dispatch
         ptr = W.unpack_pointer(payload)
         ptr.zero? ? nil : wrap_dispatch_pointer(ptr)
+      when :other then variant_to_bstr_value(bytes)
       end
+    end
+
+    # ole_variant2val's default branch (VT_CY, VT_DECIMAL, ...): the
+    # VariantChangeTypeEx(VT_BSTR) rendering, or nil if it can't convert.
+    def variant_to_bstr_value(bytes)
+      dest = ("\x00" * W::VARIANT_SIZE).b
+      hr = W.variant_change_type.call(dest, bytes, locale, 0, W::VT_BSTR)
+      return nil if W.failed?(hr)
+
+      addr = W.unpack_pointer(W.unpack_variant(dest)[1])
+      str = W.bstr_to_s(addr) || ''
+      W.sys_free_string.call(addr) unless addr.zero?
+      str
     end
 
     def resolve_clsid(server)

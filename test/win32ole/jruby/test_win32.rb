@@ -84,9 +84,16 @@ class TestWin32 < Test::Unit::TestCase
     assert_equal(:dispatch, W.variant_ruby_type(W::VT_UNKNOWN))
   end
 
-  def test_variant_ruby_type_rejects_unsupported_vartype
-    err = assert_raise(NotImplementedError) { W.variant_ruby_type(99) }
-    assert_match(/99/, err.message)
+  # ole_variant2val renders any type it has no case for (VT_CY, VT_DECIMAL,
+  # ...) through VariantChangeTypeEx(VT_BSTR).
+  def test_variant_ruby_type_falls_back_to_bstr_conversion_for_other_vartypes
+    assert_equal(:other, W.variant_ruby_type(W::VT_CY))
+    assert_equal(:other, W.variant_ruby_type(99))
+  end
+
+  def test_variant_ruby_type_maps_null_and_date
+    assert_equal(:empty, W.variant_ruby_type(W::VT_NULL))
+    assert_equal(:date, W.variant_ruby_type(W::VT_DATE))
   end
 
   def test_variant_ruby_type_covers_all_scalar_vartypes_phase3_added

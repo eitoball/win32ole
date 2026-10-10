@@ -84,7 +84,7 @@ class WIN32OLE
           W.pack_variant(vartype & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
         else
           @bstrs_to_free = []
-          pack_scalar_explicit(base_vt, val)
+          scalar_realvar(val, vartype)
         end
 
       @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
@@ -118,7 +118,7 @@ class WIN32OLE
           psa = SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free ||= [])
           W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
         else
-          pack_scalar_explicit(base_vt, val)
+          scalar_realvar(val, vt)
         end
       @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
       @var = byref ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
@@ -213,49 +213,47 @@ class WIN32OLE
       end
     end
 
-    SCALAR_PACK = {
-      VT::VT_I1 => :pack_i1, VT::VT_UI1 => :pack_ui1, VT::VT_I2 => :pack_i2, VT::VT_UI2 => :pack_ui2,
-      VT::VT_I4 => :pack_i4, VT::VT_UI4 => :pack_ui4, VT::VT_INT => :pack_int, VT::VT_UINT => :pack_uint,
-      VT::VT_I8 => :pack_i8, VT::VT_UI8 => :pack_ui8, VT::VT_R4 => :pack_r4, VT::VT_R8 => :pack_r8,
-      VT::VT_BOOL => :pack_bool, VT::VT_ERROR => :pack_error, VT::VT_EMPTY => :pack_empty
-    }.freeze
+    # ext/win32ole/win32ole_variant.c's ole_val2olevariantdata, non-array
+    # branch: nil is the zero of the requested type; VT_ERROR takes the
+    # SCODE as is; anything else is converted to its natural VARIANT (I8/UI8
+    # packed directly, as ole_val2variant_ex does) and, when that type
+    # differs, coerced with VariantChangeTypeEx. VT_VARIANT keeps the
+    # natural VARIANT.
+    def scalar_realvar(val, vt)
+      base_vt = vt & ~VT::VT_BYREF
+      return error_realvar(val) if base_vt == VT::VT_ERROR
+      if val.nil?
+        return W.pack_variant(VT::VT_EMPTY, W.pack_empty) if vt == (VT::VT_VARIANT | VT::VT_BYREF)
 
-    def pack_scalar_explicit(base_vt, val)
-      if base_vt == VT::VT_EMPTY || base_vt == VT::VT_NULL
         return W.pack_variant(base_vt, W.pack_empty)
       end
-      if base_vt == VT::VT_BSTR
-        bstr = W.sys_alloc_string.call(W.wstr(val))
-        (@bstrs_to_free ||= []) << bstr
-        return W.pack_variant(base_vt, W.pack_pointer(bstr))
-      end
-      if base_vt == VT::VT_DISPATCH || base_vt == VT::VT_UNKNOWN
-        ptr = val.nil? ? 0 : val.instance_variable_get(:@ptr)
-        return W.pack_variant(base_vt, W.pack_pointer(ptr))
-      end
 
-      pack_method = SCALAR_PACK[base_vt]
-      unless pack_method
-        raise NotImplementedError, "VARTYPE #{base_vt} is not supported yet"
-      end
+      natural =
+        case base_vt
+        when VT::VT_I8 then W.pack_variant(base_vt, W.pack_i8(val))
+        when VT::VT_UI8 then W.pack_variant(base_vt, W.pack_ui8(val))
+        else WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free ||= [])
+        end
+      return natural if base_vt == VT::VT_VARIANT
 
-      inferred_vt = W.ruby_to_variant_type(val) rescue nil
-      needs_coercion = inferred_vt && W::VT_FOR_TYPE[inferred_vt] != base_vt
-      if needs_coercion
-        coerce_via_variant_change_type(val, base_vt)
-      else
-        W.pack_variant(base_vt, W.send(pack_method, val))
-      end
+      natural_vt, = W.unpack_variant(natural)
+      natural_vt == base_vt ? natural : change_type(natural, base_vt)
     end
 
-    # Mirrors MRI's ole_val2variant_ex + VariantChangeTypeEx fallback for
-    # a mismatched explicit VARTYPE (spec §4.2) -- e.g.
-    # Variant.new("2e3", VariantType::VT_R4). Native call, CI-only.
-    def coerce_via_variant_change_type(val, base_vt)
-      src_type = W.ruby_to_variant_type(val)
-      src = W.pack_variant(W::VT_FOR_TYPE.fetch(src_type), WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free ||= [])[8, 8])
+    # ole_val2variant_err: an Integer SCODE (or nil for 0), possibly held
+    # in another Variant.
+    def error_realvar(val)
+      scode = val.is_a?(Variant) ? val.value : val
+      unless scode.nil? || scode.is_a?(::Integer)
+        raise WIN32OLE::RuntimeError, "failed to convert VT_ERROR VARIANT:`#{scode.inspect}'"
+      end
+
+      W.pack_variant(VT::VT_ERROR, W.pack_error(scode || 0))
+    end
+
+    def change_type(variant_bytes, vt)
       dest = ("\x00" * W::VARIANT_SIZE).b
-      hr = W.variant_change_type.call(dest, src, WIN32OLE.locale, 0, base_vt)
+      hr = W.variant_change_type.call(dest, variant_bytes, WIN32OLE.locale, 0, vt)
       raise WIN32OLE::RuntimeError, "failed to change variant type: #{W.hr_hex(hr)}" if W.failed?(hr)
 
       dest

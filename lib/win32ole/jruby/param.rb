@@ -105,8 +105,6 @@ class WIN32OLE
       when :bstr then W.bstr_to_s(W.unpack_pointer(payload))
       else nil
       end
-    rescue NotImplementedError
-      nil
     end
   end
 end

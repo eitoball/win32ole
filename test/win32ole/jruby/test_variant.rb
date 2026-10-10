@@ -1,7 +1,7 @@
 require 'test/unit'
 
 if RUBY_ENGINE == 'jruby'
-require 'win32ole/jruby/variant'
+require 'win32ole/jruby/win32ole'
 
 class TestVariantType < Test::Unit::TestCase
   def test_vt_i4_matches_win32_constant
@@ -13,9 +13,7 @@ class TestVariantType < Test::Unit::TestCase
     assert_equal(0x4000, WIN32OLE::VariantType::VT_BYREF)
   end
 
-  def test_vt_cy_and_vt_date_are_still_defined_as_constants_even_though_unsupported
-    # Non-goal (spec §3) means the *marshaling* code doesn't implement
-    # these -- the constant table itself is unconditional (spec §1.2).
+  def test_vt_cy_and_vt_date_constants
     assert_equal(6, WIN32OLE::VariantType::VT_CY)
     assert_equal(7, WIN32OLE::VariantType::VT_DATE)
   end
@@ -74,6 +72,87 @@ class TestVariantArrayIndexValidation < Test::Unit::TestCase
   def test_bracket_write_raises_argument_error_on_mismatched_index_count
     v = build_array_variant
     assert_raise(ArgumentError) { v[0] = 1 }
+  end
+end
+
+# ole_val2olevariantdata / ole_variant2val semantics that need no OLE
+# Automation call (no VariantChangeTypeEx, no SysAllocString).
+class TestVariantScalarSemantics < Test::Unit::TestCase
+  VT = WIN32OLE::VariantType
+  V = WIN32OLE::Variant
+
+  def test_nil_with_a_numeric_vartype_is_that_types_zero
+    v = V.new(nil, VT::VT_I4)
+    assert_equal([0, VT::VT_I4], [v.value, v.vartype])
+    assert_equal(0.0, V.new(nil, VT::VT_R8).value)
+    assert_equal(false, V.new(nil, VT::VT_BOOL).value)
+  end
+
+  def test_null_and_empty_read_back_as_nil
+    assert_nil(V::Null.value)
+    assert_nil(V.new(nil, VT::VT_EMPTY).value)
+  end
+
+  def test_nil_bstr_reads_back_as_an_empty_string
+    v = V.new(nil, VT::VT_BSTR)
+    assert_equal(['', VT::VT_BSTR], [v.value, v.vartype])
+  end
+
+  def test_nil_variant_keeps_vt_variant_and_reads_back_nil
+    v = V.new(nil, VT::VT_VARIANT)
+    assert_equal([nil, VT::VT_VARIANT], [v.value, v.vartype])
+  end
+
+  def test_nil_dispatch_reads_back_nil
+    assert_nil(V.new(nil, VT::VT_DISPATCH).value)
+  end
+
+  def test_nil_date_is_the_ole_epoch
+    assert_equal(Time.new(1899, 12, 30), V.new(nil, VT::VT_DATE).value)
+  end
+
+  def test_vt_error_holds_the_scode
+    v = V.new(-1, VT::VT_ERROR)
+    assert_equal([-1, VT::VT_ERROR], [v.value, v.vartype])
+    assert_equal(-2147352572, V::NoParam.value)
+  end
+
+  def test_vt_error_rejects_a_non_integer
+    assert_raise(WIN32OLE::RuntimeError) { V.new('x', VT::VT_ERROR) }
+  end
+
+  def test_a_variant_value_is_converted_from_its_own_variant
+    assert_equal(3, V.new(V.new(3, VT::VT_I4), VT::VT_I4).value)
+  end
+
+  def test_a_time_becomes_vt_date_and_round_trips
+    t = Time.new(2014, 8, 27, 12, 34, 56) + 0.789
+    v = V.new(t)
+    assert_equal(VT::VT_DATE, v.vartype)
+    assert_in_delta(t, v.value, 0.001)
+    assert_equal(Time.new(2004, 12, 24, 12, 24, 45), V.new(Time.new(2004, 12, 24, 12, 24, 45), VT::VT_DATE).value)
+  end
+end
+
+# An OLE DATE counts days from 1899-12-30; for negative dates the
+# fraction is the time of day itself, not an offset toward zero.
+class TestOleDateConversion < Test::Unit::TestCase
+  W = WIN32OLE::Win32
+
+  def test_fractional_days_carry_milliseconds
+    t = W.vtdate_to_time(41878.524268391200167) # 2014-08-27 12:34:56.789
+    assert_equal('2014-08-27 12:34:56', t.strftime('%Y-%m-%d %H:%M:%S'))
+    assert_in_delta(0.789, t.nsec / 1_000_000_000.0, 0.001)
+  end
+
+  def test_negative_dates_keep_a_positive_time_of_day
+    assert_equal(Time.new(1899, 12, 29, 6, 0, 0), W.vtdate_to_time(-1.25))
+    assert_equal(Time.new(100, 1, 1), W.vtdate_to_time(-657434.0))
+  end
+
+  def test_time_to_vtdate_is_the_inverse
+    assert_equal(0.0, W.time_to_vtdate(Time.new(1899, 12, 30)))
+    assert_equal(-1.25, W.time_to_vtdate(Time.new(1899, 12, 29, 6, 0, 0)))
   end
 end
 end

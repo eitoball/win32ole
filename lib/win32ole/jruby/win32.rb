@@ -24,6 +24,8 @@ class WIN32OLE
     VT_I4       = 3
     VT_R4       = 4
     VT_R8       = 5
+    VT_CY       = 6
+    VT_DATE     = 7
     VT_BSTR     = 8
     VT_DISPATCH = 9
     VT_ERROR    = 10
@@ -106,7 +108,7 @@ class WIN32OLE
 
     VT_FOR_TYPE = {
       i4: VT_I4, i8: VT_I8, r8: VT_R8, bool: VT_BOOL,
-      empty: VT_EMPTY, bstr: VT_BSTR, dispatch: VT_DISPATCH
+      empty: VT_EMPTY, bstr: VT_BSTR, dispatch: VT_DISPATCH, date: VT_DATE
     }.freeze
 
     INT32_RANGE = (-(2**31))..(2**31 - 1)
@@ -258,6 +260,7 @@ class WIN32OLE
       when true, false then :bool
       when nil then :empty
       when ::WIN32OLE then :dispatch
+      when ::Time then :date
       else
         raise TypeError, "unsupported argument type for OLE call: #{value.class}"
       end
@@ -265,7 +268,10 @@ class WIN32OLE
 
     def variant_ruby_type(vt)
       case vt
-      when VT_EMPTY then :empty
+      # A bare VT_VARIANT holds no value: ole_variant2val's VT_BSTR
+      # conversion of it always fails, giving nil.
+      when VT_EMPTY, VT_NULL, VT_VARIANT then :empty
+      when VT_DATE then :date
       when VT_I4 then :i4
       when VT_I8 then :i8
       when VT_R8 then :r8
@@ -282,9 +288,30 @@ class WIN32OLE
       when VT_UINT then :uint
       when VT_R4 then :r4
       when VT_ERROR then :error
-      else
-        raise NotImplementedError, "VARTYPE #{vt} is not supported yet"
+      else :other # VT_CY, VT_DECIMAL, ...: ole_variant2val's VT_BSTR fallback
       end
+    end
+
+    OLE_DATE_EPOCH = Time.utc(1899, 12, 30)
+    SECONDS_PER_DAY = 86_400
+
+    # An OLE DATE is days since 1899-12-30, but for a negative DATE the
+    # fraction is the time of day itself (-1.25 is 1899-12-29 06:00), not
+    # an offset toward zero. Like vtdate2rbtime/rbtime2vtdate, these work
+    # on wall-clock fields in the local zone; computing them in UTC avoids
+    # VariantTimeToSystemTime's whole-second rounding that C has to undo.
+    def vtdate_to_time(date)
+      days = date.truncate
+      seconds = (days * SECONDS_PER_DAY) + ((date - days).abs * SECONDS_PER_DAY)
+      wall = OLE_DATE_EPOCH + seconds
+      Time.new(wall.year, wall.month, wall.day, wall.hour, wall.min, wall.sec + wall.subsec)
+    end
+
+    def time_to_vtdate(time)
+      wall = Time.utc(time.year, time.month, time.day, time.hour, time.min, time.sec + time.subsec)
+      days = (wall - OLE_DATE_EPOCH) / SECONDS_PER_DAY
+      whole = days.floor
+      whole.negative? && days != whole ? whole - (days - whole) : days.to_f
     end
 
     def dispatch_plan(name, args)
