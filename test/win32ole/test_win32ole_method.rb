@@ -97,7 +97,10 @@ if defined?(WIN32OLE::Method)
     end
 
     def is_ruby64?
-      /mswin64|x64-mingw/ =~ RUBY_PLATFORM
+      /mswin64|x64-mingw/ =~ RUBY_PLATFORM ||
+        # JRuby's RUBY_PLATFORM is "java"; the JVM's own bitness is what
+        # sizes the vtable slots.
+        (RUBY_ENGINE == 'jruby' && ENV_JAVA['sun.arch.data.model'] == '64')
     end
 
     def test_offset_vtbl
