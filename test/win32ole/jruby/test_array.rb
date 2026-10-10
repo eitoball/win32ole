@@ -63,5 +63,17 @@ class TestSafeArray < Test::Unit::TestCase
     err = assert_raise(TypeError) { SA.ruby_array_to_safearray('not an array', WIN32OLE::Win32::VT_I4) }
     assert_match(/String/, err.message)
   end
+
+  # ole_set_safe_array only writes while every index is in bounds, so an
+  # empty dimension means no elements at all.
+  def test_each_fill_index_yields_nothing_for_an_empty_dimension
+    assert_equal([], SA.each_fill_index([0]).to_a)
+    assert_equal([], SA.each_fill_index([1, 0]).to_a)
+  end
+
+  def test_each_read_index_yields_nothing_for_an_empty_dimension
+    assert_equal([], SA.each_read_index([0], [-1]).to_a)
+    assert_equal([], SA.each_read_index([0, 0], [1, -1]).to_a)
+  end
 end
 end

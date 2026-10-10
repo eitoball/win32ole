@@ -74,14 +74,17 @@ class WIN32OLE
 
       raise ArgumentError, 'WIN32OLE::Variant does not support VT_RECORD; use WIN32OLE::Record instead' if (vartype & VT::VT_TYPEMASK) == VT::VT_RECORD
 
+      # ole_val_ary2variant_ary: a plain VT_ARRAY is an array of VARIANTs.
+      vartype |= VT::VT_VARIANT if (vartype & ~VT::VT_BYREF) == VT::VT_ARRAY
       base_vt = vartype & VT::VT_TYPEMASK
       byref = (vartype & VT::VT_BYREF) != 0
 
       realvar_bytes =
         if (vartype & VT::VT_ARRAY) != 0
           @bstrs_to_free = []
-          psa = SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free)
-          W.pack_variant(vartype & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
+          # nil: the type with no SAFEARRAY behind it, as C leaves it
+          psa = val.nil? ? 0 : SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free).to_i
+          W.pack_variant(vartype & ~VT::VT_BYREF, W.pack_pointer(psa))
         else
           @bstrs_to_free = []
           scalar_realvar(val, vartype)
@@ -95,14 +98,13 @@ class WIN32OLE
     def value
       vt, = W.unpack_variant(@var)
       base_vt = vt & VT::VT_TYPEMASK
-      if (vt & VT::VT_ARRAY) != 0
+      if (vt & VT::VT_ARRAY) != 0 && base_vt == VT::VT_UI1
         psa = current_array_ptr
-        return SA.ui1_safearray_to_bytes(psa) if base_vt == VT::VT_UI1 && SA.safe_array_get_dim.call(psa) == 1
-
-        return SA.safearray_to_ruby_array(psa, base_vt)
+        return SA.ui1_safearray_to_bytes(psa) if !psa.zero? && SA.safe_array_get_dim.call(psa) == 1
       end
 
-      WIN32OLE.variant_bytes_to_ruby_value(current_scalar_bytes)
+      # The Variant keeps owning what @var holds (folevariant_value copies).
+      WIN32OLE.variant_bytes_to_ruby_value(@var, owned: false)
     end
 
     def value=(val)
@@ -154,13 +156,7 @@ class WIN32OLE
         hr = SA.safe_array_ptr_of_index.call(psa, index_buf, elem_ptr_out)
         raise WIN32OLE::RuntimeError, "failed to SafeArrayPtrOfIndex: #{W.hr_hex(hr)}" if W.failed?(hr)
 
-        elem_addr = elem_ptr_out.unpack1(W::PACK_PTR)
-        if base_vt == VT::VT_VARIANT
-          WIN32OLE.variant_bytes_to_ruby_value(Fiddle::Pointer.new(elem_addr)[0, W::VARIANT_SIZE])
-        else
-          fmt = SA::ELEMENT_PACK_FORMAT.fetch(base_vt) { raise NotImplementedError, "VARTYPE #{base_vt} is not a supported array element type yet" }
-          SA.unpack_scalar_element(base_vt, Fiddle::Pointer.new(elem_addr)[0, [1].pack(fmt).bytesize])
-        end
+        SA.read_element(elem_ptr_out.unpack1(W::PACK_PTR), base_vt)
       ensure
         SA.safe_array_unlock.call(psa)
       end
@@ -177,12 +173,7 @@ class WIN32OLE
       raise WIN32OLE::RuntimeError, "failed to SafeArrayLock: #{W.hr_hex(hr)}" if W.failed?(hr)
 
       begin
-        leaf = base_vt == VT::VT_VARIANT ? WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free ||= [])
-                                          : SA.pack_scalar_element(base_vt, val)
-        index_buf = indices.pack('l' * indices.size)
-        hr = SA.safe_array_put_element.call(psa, index_buf, W.native_pointer_for(leaf))
-        raise WIN32OLE::RuntimeError, "failed to SafeArrayPutElement: #{W.hr_hex(hr)}" if W.failed?(hr)
-
+        SA.write_element(psa, indices.pack('l' * indices.size), base_vt, val, @bstrs_to_free ||= [])
         val
       ensure
         SA.safe_array_unlock.call(psa)
@@ -197,20 +188,6 @@ class WIN32OLE
       return addr if (vt & VT::VT_BYREF).zero?
 
       Fiddle::Pointer.new(addr)[0, W::PTR_SIZE].unpack1(W::PACK_PTR)
-    end
-
-    def current_scalar_bytes
-      vt, payload = W.unpack_variant(@var)
-      return @var if (vt & VT::VT_BYREF).zero?
-
-      base_vt = vt & VT::VT_TYPEMASK
-      addr = W.unpack_pointer(payload)
-      if base_vt == VT::VT_VARIANT
-        Fiddle::Pointer.new(addr)[0, W::VARIANT_SIZE]
-      else
-        body = Fiddle::Pointer.new(addr)[0, 8]
-        W.pack_variant(base_vt, body)
-      end
     end
 
     # ext/win32ole/win32ole_variant.c's ole_val2olevariantdata, non-array
@@ -237,7 +214,7 @@ class WIN32OLE
       return natural if base_vt == VT::VT_VARIANT
 
       natural_vt, = W.unpack_variant(natural)
-      natural_vt == base_vt ? natural : change_type(natural, base_vt)
+      natural_vt == base_vt ? natural : W.change_variant_type(natural, base_vt)
     end
 
     # ole_val2variant_err: an Integer SCODE (or nil for 0), possibly held
@@ -249,14 +226,6 @@ class WIN32OLE
       end
 
       W.pack_variant(VT::VT_ERROR, W.pack_error(scode || 0))
-    end
-
-    def change_type(variant_bytes, vt)
-      dest = ("\x00" * W::VARIANT_SIZE).b
-      hr = W.variant_change_type.call(dest, variant_bytes, WIN32OLE.locale, 0, vt)
-      raise WIN32OLE::RuntimeError, "failed to change variant type: #{W.hr_hex(hr)}" if W.failed?(hr)
-
-      dest
     end
 
     def set_array_var(psa, vt)

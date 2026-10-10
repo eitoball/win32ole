@@ -292,6 +292,52 @@ class WIN32OLE
       end
     end
 
+    # Bytes a VT_BYREF pointer refers to, per referenced type.
+    VALUE_SIZES = {
+      VT_I1 => 1, VT_UI1 => 1, VT_I2 => 2, VT_UI2 => 2, VT_BOOL => 2,
+      VT_I4 => 4, VT_UI4 => 4, VT_INT => 4, VT_UINT => 4, VT_R4 => 4, VT_ERROR => 4
+    }.freeze
+
+    def value_size(vt)
+      return PTR_SIZE if (vt & VT_ARRAY) != 0 || [VT_BSTR, VT_DISPATCH, VT_UNKNOWN].include?(vt)
+
+      VALUE_SIZES.fetch(vt, 8)
+    end
+
+    # The non-BYREF VARIANT a VT_BYREF one refers to (a copy of its bytes),
+    # following VT_VARIANT|VT_BYREF chains as ole_variant2val does; a
+    # non-BYREF VARIANT is returned as is.
+    def deref_variant(bytes)
+      vt, payload = unpack_variant(bytes)
+      while (vt & VT_BYREF) != 0
+        base_vt = vt & ~VT_BYREF
+        addr = unpack_pointer(payload)
+        return pack_variant(base_vt, pack_empty) if addr.zero?
+
+        if base_vt == VT_VARIANT
+          bytes = Fiddle::Pointer.new(addr)[0, VARIANT_SIZE]
+          vt, payload = unpack_variant(bytes)
+        else
+          data = Fiddle::Pointer.new(addr)[0, value_size(base_vt)]
+          return pack_variant(base_vt, data.ljust(8, "\x00".b))
+        end
+      end
+      bytes
+    end
+
+    # VariantChangeTypeEx under WIN32OLE.locale; returns the new VARIANT.
+    def change_variant_type(variant_bytes, vt)
+      dest = ("\x00" * VARIANT_SIZE).b
+      hr = variant_change_type.call(dest, variant_bytes, WIN32OLE.locale, 0, vt)
+      raise WIN32OLE::RuntimeError, "failed to change variant type: #{hr_hex(hr)}" if failed?(hr)
+
+      dest
+    end
+
+    def add_ref(iunknown_ptr)
+      vtable_function(iunknown_ptr, 1, [VOIDP], DWORD).call(iunknown_ptr)
+    end
+
     OLE_DATE_EPOCH = Time.utc(1899, 12, 30)
     SECONDS_PER_DAY = 86_400
 

@@ -634,7 +634,8 @@ class WIN32OLE
       cargs, rgvarg_addr = read_dispparams(pdispparams_ptr)
       cargs.times do |i|
         var_ptr = Fiddle::Pointer.new(rgvarg_addr + (cargs - i - 1) * W::VARIANT_SIZE)
-        args << WIN32OLE.variant_bytes_to_ruby_value(var_ptr[0, W::VARIANT_SIZE])
+        # rgvarg belongs to the event source; read it without consuming it
+        args << WIN32OLE.variant_bytes_to_ruby_value(var_ptr[0, W::VARIANT_SIZE], owned: false)
       end
       outargv = nil
       if with_outargs

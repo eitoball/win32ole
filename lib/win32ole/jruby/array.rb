@@ -118,6 +118,8 @@ class WIN32OLE
     def each_fill_index(sizes)
       return enum_for(:each_fill_index, sizes) unless block_given?
 
+      return if sizes.any?(&:zero?)
+
       pid = Array.new(sizes.size, 0)
       loop do
         yield pid.dup
@@ -141,6 +143,8 @@ class WIN32OLE
     def each_read_index(lbounds, ubounds)
       return enum_for(:each_read_index, lbounds, ubounds) unless block_given?
 
+      return if lbounds.zip(ubounds).any? { |lb, ub| ub < lb }
+
       pid = lbounds.dup
       loop do
         yield pid.dup
@@ -156,35 +160,55 @@ class WIN32OLE
       end
     end
 
-    # Pointer-typed elements (VT_BSTR, VT_DISPATCH, VT_UNKNOWN) are
-    # deliberately absent here: unlike a true scalar, a pointer element
-    # needs real marshaling (BSTR allocation/decoding, IDispatch/IUnknown
-    # refcounting/wrapping) to become a meaningful Ruby value or back --
-    # that marshaling only exists today inside the VT_VARIANT branch (via
-    # WIN32OLE.ruby_value_to_variant_bytes/.variant_bytes_to_ruby_value).
-    # A directly-BSTR/Dispatch/Unknown-typed SAFEARRAY element raises
-    # NotImplementedError (via the .fetch fallback below) until that
-    # marshaling is built for the non-VARIANT scalar path, rather than
-    # packing/unpacking the wrong thing.
-    ELEMENT_PACK_FORMAT = {
-      W::VT_I1 => 'c', W::VT_UI1 => 'C', W::VT_I2 => 's', W::VT_UI2 => 'S',
-      W::VT_I4 => 'l', W::VT_UI4 => 'L', W::VT_INT => 'l', W::VT_UINT => 'L',
-      W::VT_I8 => 'q', W::VT_UI8 => 'Q', W::VT_R4 => 'f', W::VT_R8 => 'd',
-      W::VT_ERROR => 'l', W::VT_BOOL => 's'
-    }.freeze
+    POINTER_ELEMENT_TYPES = [W::VT_BSTR, W::VT_DISPATCH, W::VT_UNKNOWN].freeze
 
-    def pack_scalar_element(vt, value)
-      fmt = ELEMENT_PACK_FORMAT.fetch(vt) { raise NotImplementedError, "VARTYPE #{vt} is not a supported array element type yet" }
-      [value].pack(fmt)
+    # One element's value, read the way ole_variant2val reads a SAFEARRAY:
+    # through a VT_BYREF VARIANT pointing at it, without taking ownership
+    # of anything the array still holds.
+    def read_element(elem_addr, base_vt)
+      byref = W.pack_variant(base_vt | W::VT_BYREF, W.pack_pointer(elem_addr))
+      WIN32OLE.variant_bytes_to_ruby_value(byref, owned: false)
     end
 
-    def unpack_scalar_element(vt, bytes)
-      fmt = ELEMENT_PACK_FORMAT.fetch(vt) { raise NotImplementedError, "VARTYPE #{vt} is not a supported array element type yet" }
-      bytes.unpack1(fmt)
+    # ole_set_safe_array's val2variant_ptr + SafeArrayPutElement: the
+    # value's natural VARIANT, coerced to the element type; a VT_VARIANT
+    # element takes the VARIANT itself, a BSTR/IDispatch/IUnknown element
+    # the pointer (SafeArrayPutElement copies or AddRefs it), any other the
+    # address of the value.
+    def write_element(psa, index_buf, base_vt, val, bstrs_to_free)
+      if base_vt == W::VT_VARIANT
+        var = WIN32OLE.ruby_value_to_variant_bytes(val, bstrs_to_free)
+        return put_element(psa, index_buf, W.native_pointer_for(var))
+      end
+
+      var = val.nil? ? W.pack_variant(base_vt, W.pack_empty) : WIN32OLE.ruby_value_to_variant_bytes(val, bstrs_to_free)
+      natural_vt, = W.unpack_variant(var)
+      if natural_vt != base_vt
+        var = W.change_variant_type(var, base_vt)
+        converted_bstr = base_vt == W::VT_BSTR
+      end
+      _vt, payload = W.unpack_variant(var)
+      if POINTER_ELEMENT_TYPES.include?(base_vt)
+        ptr = W.unpack_pointer(payload)
+        if ptr.zero? && base_vt != W::VT_BSTR
+          raise WIN32OLE::RuntimeError, 'element of array does not have IDispatch or IUnknown Interface'
+        end
+
+        put_element(psa, index_buf, ptr)
+        W.sys_free_string.call(ptr) if converted_bstr && !ptr.zero?
+      else
+        put_element(psa, index_buf, W.native_pointer_for(payload))
+      end
+    end
+
+    def put_element(psa, index_buf, pv)
+      hr = safe_array_put_element.call(psa, index_buf, pv)
+      raise WIN32OLE::RuntimeError, "failed to SafeArrayPutElement: #{W.hr_hex(hr)}" if W.failed?(hr)
     end
 
     def ruby_array_to_safearray(ary, elem_vt, bstrs_to_free = [])
       base_vt = elem_vt & W::VT_TYPEMASK
+      base_vt = W::VT_VARIANT if base_vt.zero? # ole_val_ary2variant_ary: plain VT_ARRAY means VT_VARIANT elements
       return ui1_safearray_from_bytes(ary) if base_vt == W::VT_UI1 && ary.is_a?(::String)
       raise TypeError, "wrong argument type #{ary.class} (expected Array)" unless ary.is_a?(::Array)
 
@@ -199,12 +223,7 @@ class WIN32OLE
 
       begin
         each_fill_index(sizes) do |pid|
-          val = nested_entry(ary, pid)
-          leaf = base_vt == W::VT_VARIANT ? WIN32OLE.ruby_value_to_variant_bytes(val, bstrs_to_free)
-                                           : pack_scalar_element(base_vt, val)
-          index_buf = pid.pack('l' * dims)
-          hr = safe_array_put_element.call(psa, index_buf, W.native_pointer_for(leaf))
-          raise WIN32OLE::RuntimeError, "failed to SafeArrayPutElement: #{W.hr_hex(hr)}" if W.failed?(hr)
+          write_element(psa, pid.pack('l' * dims), base_vt, nested_entry(ary, pid), bstrs_to_free)
         end
       ensure
         safe_array_unlock.call(psa)
@@ -230,14 +249,7 @@ class WIN32OLE
           hr = safe_array_ptr_of_index.call(psa, index_buf, elem_ptr_out)
           raise WIN32OLE::RuntimeError, "failed to SafeArrayPtrOfIndex: #{W.hr_hex(hr)}" if W.failed?(hr)
 
-          elem_addr = elem_ptr_out.unpack1(W::PACK_PTR)
-          val =
-            if base_vt == W::VT_VARIANT
-              WIN32OLE.variant_bytes_to_ruby_value(Fiddle::Pointer.new(elem_addr)[0, W::VARIANT_SIZE])
-            else
-              size = ELEMENT_PACK_FORMAT.fetch(base_vt) { raise NotImplementedError, "VARTYPE #{base_vt} is not a supported array element type yet" }
-              unpack_scalar_element(base_vt, Fiddle::Pointer.new(elem_addr)[0, [1].pack(size).bytesize])
-            end
+          val = read_element(elem_ptr_out.unpack1(W::PACK_PTR), base_vt)
           zero_based_pid = pid.each_with_index.map { |v, d| v - lbounds[d] }
           store_nested(result, zero_based_pid, val)
         end

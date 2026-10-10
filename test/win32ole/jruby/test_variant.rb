@@ -134,6 +134,47 @@ class TestVariantScalarSemantics < Test::Unit::TestCase
   end
 end
 
+# Reading a VARIANT a caller doesn't own (a Variant's own value, a
+# SAFEARRAY element, anything reached through VT_BYREF) must leave it
+# intact, as ole_variant2val does: no SysFreeString, an AddRef before
+# wrapping an IDispatch.
+class TestBorrowedVariantRead < Test::Unit::TestCase
+  W = WIN32OLE::Win32
+  VT = WIN32OLE::VariantType
+
+  def fake_bstr(str)
+    body = str.encode('UTF-16LE').b
+    buf = Fiddle::Pointer.malloc(4 + body.bytesize + 2)
+    buf[0, 4] = [body.bytesize].pack('L')
+    buf[4, body.bytesize + 2] = body + "\x00\x00".b
+    buf
+  end
+
+  def test_a_borrowed_bstr_is_read_without_being_freed
+    buf = fake_bstr('abc')
+    var = W.pack_variant(VT::VT_BSTR, W.pack_pointer(buf.to_i + 4))
+    assert_equal('abc', WIN32OLE.variant_bytes_to_ruby_value(var, owned: false))
+  ensure
+    Fiddle.free(buf) if buf
+  end
+
+  def test_byref_values_are_dereferenced
+    cell = Fiddle::Pointer.malloc(8)
+    cell[0, 8] = [42].pack('l') + "\x00".b * 4
+    var = W.pack_variant(VT::VT_I4 | VT::VT_BYREF, W.pack_pointer(cell.to_i))
+    assert_equal(42, WIN32OLE.variant_bytes_to_ruby_value(var))
+  ensure
+    Fiddle.free(cell) if cell
+  end
+
+  def test_a_null_array_variant_reads_back_nil
+    [VT::VT_ARRAY | VT::VT_DISPATCH, VT::VT_ARRAY | VT::VT_DISPATCH | VT::VT_BYREF].each do |vt|
+      v = WIN32OLE::Variant.new(nil, vt)
+      assert_equal([nil, vt], [v.value, v.vartype])
+    end
+  end
+end
+
 # An OLE DATE counts days from 1899-12-30; for negative dates the
 # fraction is the time of day itself, not an offset toward zero.
 class TestOleDateConversion < Test::Unit::TestCase

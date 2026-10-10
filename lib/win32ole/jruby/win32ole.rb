@@ -134,13 +134,25 @@ class WIN32OLE
       W.pack_variant(W::VT_FOR_TYPE.fetch(type), payload)
     end
 
-    def variant_bytes_to_ruby_value(bytes)
+    # ole_variant2val. owned: true (a call's own result) hands its BSTR /
+    # IDispatch reference over to the Ruby value; owned: false (a
+    # Variant's own value, a SAFEARRAY element, anything behind VT_BYREF)
+    # leaves the VARIANT intact -- the BSTR is not freed and the IDispatch
+    # is AddRef'd before being wrapped.
+    def variant_bytes_to_ruby_value(bytes, owned: true)
       vt, = W.unpack_variant(bytes)
+      if (vt & W::VT_BYREF) != 0
+        owned = false
+        bytes = W.deref_variant(bytes)
+        vt, = W.unpack_variant(bytes)
+      end
       base_vt = vt & W::VT_TYPEMASK
 
       if (vt & W::VT_ARRAY) != 0
         _vt, payload = W.unpack_variant(bytes)
         psa = W.unpack_pointer(payload)
+        return nil if psa.zero?
+
         return SafeArray.safearray_to_ruby_array(psa, base_vt)
       end
 
@@ -172,11 +184,14 @@ class WIN32OLE
       when :bstr
         addr = W.unpack_pointer(payload)
         str = W.bstr_to_s(addr) || '' # a NULL BSTR is "", as in ole_variant2val
-        W.sys_free_string.call(addr) unless addr.zero?
+        W.sys_free_string.call(addr) if owned && !addr.zero?
         str
       when :dispatch
         ptr = W.unpack_pointer(payload)
-        ptr.zero? ? nil : wrap_dispatch_pointer(ptr)
+        unless ptr.zero?
+          W.add_ref(ptr) unless owned
+          wrap_dispatch_pointer(ptr)
+        end
       when :other then variant_to_bstr_value(bytes)
       end
     end
