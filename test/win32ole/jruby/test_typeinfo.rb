@@ -8,6 +8,15 @@ class TestTypeInfo < Test::Unit::TestCase
   TI = WIN32OLE::TypeInfo
   PTR64 = Fiddle::SIZEOF_VOIDP == 8
 
+  # TypeInfo memoizes each Fiddle::Function by VTABLE address, which is
+  # sound for real COM (vtables are static) but not for these tests: a
+  # fake vtable freed by one test can be malloc'd again at the same
+  # address by the next, which would then call the previous test's
+  # closures. Drop the memo between tests.
+  def teardown
+    TI.instance_variables.grep(/_fns\z/).each { |ivar| TI.remove_instance_variable(ivar) }
+  end
+
   def test_guid_size_is_16_bytes_on_every_platform
     assert_equal(16, TI::GUID.size)
   end
