@@ -63,6 +63,26 @@ class WIN32OLE
       nil
     end
 
+    # fole_s_reference_count (a debugging aid): the IDispatch's reference
+    # count, read with an AddRef/Release pair.
+    def ole_reference_count(obj)
+      ptr = obj.dispatch_ptr
+      return 0 if ptr.nil? || ptr.zero?
+
+      W.add_ref(ptr)
+      release_com_pointer(ptr)
+    end
+
+    # fole_s_free (a debugging aid): one Release while a reference is
+    # left, returning the new count. Unlike WIN32OLE#ole_free, the object
+    # keeps its pointer.
+    def ole_free(obj)
+      ptr = obj.dispatch_ptr
+      return 0 if ptr.nil? || ptr.zero? || ole_reference_count(obj).zero?
+
+      release_com_pointer(ptr)
+    end
+
     def wrap_dispatch_pointer(ptr)
       obj = allocate
       obj.instance_variable_set(:@ptr, ptr)

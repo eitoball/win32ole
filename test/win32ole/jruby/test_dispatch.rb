@@ -70,6 +70,33 @@ class TestDispatch < Test::Unit::TestCase
     assert_equal({ dispid: 100, values: [2, 1], named: [] }, @calls.last)
   end
 
+  def with_refcount(count)
+    refs = [count]
+    add_ref = Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) { |_| refs[0] += 1 }
+    release = Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) { |_| refs[0] -= 1 }
+    @closures.push(add_ref, release)
+    @vtable[1 * W::PTR_SIZE, W::PTR_SIZE] = [add_ref.to_i].pack(W::PACK_PTR)
+    @vtable[2 * W::PTR_SIZE, W::PTR_SIZE] = [release.to_i].pack(W::PACK_PTR)
+    refs
+  end
+
+  # fole_s_reference_count: AddRef+Release, reporting the count without
+  # changing it.
+  def test_s_ole_reference_count_reports_without_changing_it
+    refs = with_refcount(3)
+    assert_equal(3, WIN32OLE.ole_reference_count(@ole))
+    assert_equal([3], refs)
+  end
+
+  # fole_s_free: one Release (if any reference is left), returning the
+  # new count; the object itself is left as it is (a debugging aid).
+  def test_s_ole_free_releases_once_and_returns_the_count
+    refs = with_refcount(2)
+    assert_equal(1, WIN32OLE.ole_free(@ole))
+    assert_equal([1], refs)
+    assert_equal(@obj.to_i, @ole.instance_variable_get(:@ptr))
+  end
+
   # In ext/win32ole these are aliases, not help-file launchers:
   # ole_method_help is ole_method, ole_obj_help is ole_type.
   def test_help_methods_are_aliases
