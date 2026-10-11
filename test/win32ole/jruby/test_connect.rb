@@ -87,11 +87,13 @@ class TestConnectMoniker < Test::Unit::TestCase
 
   def test_an_unresolvable_name_is_bound_as_a_moniker
     obj = WIN32OLE.allocate
+    original = WIN32OLE.method(:wrap_dispatch_pointer)
     WIN32OLE.define_singleton_method(:wrap_dispatch_pointer) { |ptr| obj.instance_variable_set(:@ptr, ptr); obj }
     begin
       assert_same(obj, WIN32OLE.connect('winmgmts:'))
     ensure
-      WIN32OLE.singleton_class.send(:remove_method, :wrap_dispatch_pointer)
+      # restore, not remove_method: the stub replaced the real method
+      WIN32OLE.define_singleton_method(:wrap_dispatch_pointer, original)
     end
 
     assert_equal(@dispatch, obj.instance_variable_get(:@ptr))
