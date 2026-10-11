@@ -151,14 +151,14 @@ class WIN32OLE
         next if val.nil?
 
         # Port of hash2olerec (win32ole_record.c:73-81): free the temporary
-        # VARIANT's own BSTR (there VariantClear, here bstrs_to_free) right
+        # VARIANT's own BSTR (there VariantClear, here to_free) right
         # after PutField copies it, not batched at the end.
-        bstrs_to_free = []
-        var_bytes = WIN32OLE.ruby_value_to_variant_bytes(val, bstrs_to_free)
+        to_free = []
+        var_bytes = WIN32OLE.ruby_value_to_variant_bytes(val, to_free)
         hr = self.class.put_field_fn(@pri).call(
           @pri, W::DISPATCH_PROPERTYPUT, buffer_ptr.to_i, W.wstr(name), W.native_pointer_for(var_bytes)
         )
-        bstrs_to_free.each { |bstr| W.sys_free_string.call(bstr) }
+        to_free.each { |bstr| W.sys_free_string.call(bstr) }
         raise WIN32OLE::RuntimeError, "failed to putfield of `#{name}': #{W.hr_hex(hr)}" if W.failed?(hr)
       end
 

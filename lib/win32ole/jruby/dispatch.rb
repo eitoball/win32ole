@@ -57,11 +57,11 @@ class WIN32OLE
       raise WIN32OLE::RuntimeError, 'this WIN32OLE object has already been released' if @ptr.nil? || @ptr.zero?
 
       keep_alive = []
-      bstrs_to_free = []
+      to_free = []
 
       named_args ||= []
       values = named_args.map(&:last) + arg_values.reverse
-      arg_variants = values.map { |v| WIN32OLE.ruby_value_to_variant_bytes(v, bstrs_to_free) }
+      arg_variants = values.map { |v| WIN32OLE.ruby_value_to_variant_bytes(v, to_free) }
       args_blob = arg_variants.join
       args_ptr = args_blob.empty? ? nil : W.native_pointer_for(args_blob)
       keep_alive << args_ptr if args_ptr
@@ -89,7 +89,7 @@ class WIN32OLE
       result = ("\x00" * W::VARIANT_SIZE).b
 
       hr = invoke_fn.call(@ptr, dispid, W::IID_NULL, 0, wflags, dispparams, result, excepinfo, nil)
-      bstrs_to_free.each { |bstr| W.sys_free_string.call(bstr) }
+      to_free.each { |bstr| W.sys_free_string.call(bstr) }
       [hr, result, excepinfo]
     end
 

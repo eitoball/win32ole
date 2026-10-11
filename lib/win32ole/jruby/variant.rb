@@ -68,7 +68,7 @@ class WIN32OLE
 
     def initialize(val, vartype = nil, _reserved = nil)
       if vartype.nil?
-        @var = WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free = [])
+        @var = WIN32OLE.ruby_value_to_variant_bytes(val, @to_free = [])
         return
       end
 
@@ -81,12 +81,12 @@ class WIN32OLE
 
       realvar_bytes =
         if (vartype & VT::VT_ARRAY) != 0
-          @bstrs_to_free = []
+          @to_free = []
           # nil: the type with no SAFEARRAY behind it, as C leaves it
-          psa = val.nil? ? 0 : SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free).to_i
+          psa = val.nil? ? 0 : SA.ruby_array_to_safearray(val, base_vt, @to_free).to_i
           W.pack_variant(vartype & ~VT::VT_BYREF, W.pack_pointer(psa))
         else
-          @bstrs_to_free = []
+          @to_free = []
           scalar_realvar(val, vartype)
         end
 
@@ -117,7 +117,7 @@ class WIN32OLE
             raise WIN32OLE::RuntimeError, 'array value can only be replaced with a String for a VT_UI1|VT_ARRAY Variant'
           end
 
-          psa = SA.ruby_array_to_safearray(val, base_vt, @bstrs_to_free ||= [])
+          psa = SA.ruby_array_to_safearray(val, base_vt, @to_free ||= [])
           W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
         else
           scalar_realvar(val, vt)
@@ -173,7 +173,7 @@ class WIN32OLE
       raise WIN32OLE::RuntimeError, "failed to SafeArrayLock: #{W.hr_hex(hr)}" if W.failed?(hr)
 
       begin
-        SA.write_element(psa, indices.pack('l' * indices.size), base_vt, val, @bstrs_to_free ||= [])
+        SA.write_element(psa, indices.pack('l' * indices.size), base_vt, val, @to_free ||= [])
         val
       ensure
         SA.safe_array_unlock.call(psa)
@@ -209,7 +209,7 @@ class WIN32OLE
         case base_vt
         when VT::VT_I8 then W.pack_variant(base_vt, W.pack_i8(val))
         when VT::VT_UI8 then W.pack_variant(base_vt, W.pack_ui8(val))
-        else WIN32OLE.ruby_value_to_variant_bytes(val, @bstrs_to_free ||= [])
+        else WIN32OLE.ruby_value_to_variant_bytes(val, @to_free ||= [])
         end
       return natural if base_vt == VT::VT_VARIANT
 

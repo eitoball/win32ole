@@ -175,13 +175,13 @@ class WIN32OLE
     # element takes the VARIANT itself, a BSTR/IDispatch/IUnknown element
     # the pointer (SafeArrayPutElement copies or AddRefs it), any other the
     # address of the value.
-    def write_element(psa, index_buf, base_vt, val, bstrs_to_free)
+    def write_element(psa, index_buf, base_vt, val, to_free)
       if base_vt == W::VT_VARIANT
-        var = WIN32OLE.ruby_value_to_variant_bytes(val, bstrs_to_free)
+        var = WIN32OLE.ruby_value_to_variant_bytes(val, to_free)
         return put_element(psa, index_buf, W.native_pointer_for(var))
       end
 
-      var = val.nil? ? W.pack_variant(base_vt, W.pack_empty) : WIN32OLE.ruby_value_to_variant_bytes(val, bstrs_to_free)
+      var = val.nil? ? W.pack_variant(base_vt, W.pack_empty) : WIN32OLE.ruby_value_to_variant_bytes(val, to_free)
       natural_vt, = W.unpack_variant(var)
       if natural_vt != base_vt
         var = W.change_variant_type(var, base_vt)
@@ -206,7 +206,7 @@ class WIN32OLE
       raise WIN32OLE::RuntimeError, "failed to SafeArrayPutElement: #{W.hr_hex(hr)}" if W.failed?(hr)
     end
 
-    def ruby_array_to_safearray(ary, elem_vt, bstrs_to_free = [])
+    def ruby_array_to_safearray(ary, elem_vt, to_free = [])
       base_vt = elem_vt & W::VT_TYPEMASK
       base_vt = W::VT_VARIANT if base_vt.zero? # ole_val_ary2variant_ary: plain VT_ARRAY means VT_VARIANT elements
       return ui1_safearray_from_bytes(ary) if base_vt == W::VT_UI1 && ary.is_a?(::String)
@@ -223,7 +223,7 @@ class WIN32OLE
 
       begin
         each_fill_index(sizes) do |pid|
-          write_element(psa, pid.pack('l' * dims), base_vt, nested_entry(ary, pid), bstrs_to_free)
+          write_element(psa, pid.pack('l' * dims), base_vt, nested_entry(ary, pid), to_free)
         end
       ensure
         safe_array_unlock.call(psa)

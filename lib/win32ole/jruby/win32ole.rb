@@ -167,10 +167,10 @@ class WIN32OLE
       W.vtable_function(ptr, 2, [W::VOIDP], W::DWORD).call(ptr)
     end
 
-    def ruby_value_to_variant_bytes(value, bstrs_to_free)
+    def ruby_value_to_variant_bytes(value, to_free)
       case value
       when ::Array
-        psa = SafeArray.ruby_array_to_safearray(value, W::VT_VARIANT, bstrs_to_free)
+        psa = SafeArray.ruby_array_to_safearray(value, W::VT_VARIANT, to_free)
         return W.pack_variant(W::VT_VARIANT | W::VT_ARRAY, W.pack_pointer(psa.to_i))
       when WIN32OLE::Record
         return value.to_variant_bytes
@@ -188,7 +188,7 @@ class WIN32OLE
         when :empty then W.pack_empty
         when :bstr
           bstr = W.sys_alloc_string.call(W.wstr(value))
-          bstrs_to_free << bstr
+          to_free << bstr
           W.pack_pointer(bstr)
         when :dispatch
           W.pack_pointer(value.instance_variable_get(:@ptr))
@@ -715,11 +715,11 @@ class WIN32OLE
     raise WIN32OLE::RuntimeError, 'this WIN32OLE object has already been released' if @ptr.nil? || @ptr.zero?
     raise TypeError, 'wrong argument type (expected Array)' unless args.is_a?(::Array) && types.is_a?(::Array)
 
-    bstrs_to_free = []
+    to_free = []
     keep_alive = []
     arg_variants = args.zip(types).map do |val, vt|
       if vt == W::VT_VARIANT
-        WIN32OLE.ruby_value_to_variant_bytes(val, bstrs_to_free)
+        WIN32OLE.ruby_value_to_variant_bytes(val, to_free)
       else
         variant = WIN32OLE::Variant.new(val, vt)
         keep_alive << variant
@@ -744,7 +744,7 @@ class WIN32OLE
     result = ("\x00" * W::VARIANT_SIZE).b
 
     hr = invoke_fn.call(@ptr, dispid, W::IID_NULL, 0, dispkind, dispparams, result, excepinfo, nil)
-    bstrs_to_free.each { |bstr| W.sys_free_string.call(bstr) unless bstr.zero? }
+    to_free.each { |bstr| W.sys_free_string.call(bstr) unless bstr.zero? }
 
     if W.failed?(hr)
       raise WIN32OLE::RuntimeError, W.method_error_message("<dispatch id:#{dispid}>", error_detail(hr, excepinfo))
