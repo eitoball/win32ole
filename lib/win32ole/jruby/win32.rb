@@ -741,6 +741,37 @@ class WIN32OLE
       @user32 ||= Fiddle.dlopen('user32')
     end
 
+    def get_desktop_window
+      @get_desktop_window ||= Fiddle::Function.new(user32['GetDesktopWindow'], [], VOIDP, STDCALL)
+    end
+
+    HH_DISPLAY_TOPIC = 0x00
+    HH_HELP_CONTEXT = 0x0F
+
+    # HtmlHelpA from HHCTRL.OCX, or nil when that isn't available.
+    def html_help_fn
+      return @html_help_fn if defined?(@html_help_fn)
+
+      @html_help_fn =
+        begin
+          Fiddle::Function.new(Fiddle.dlopen('hhctrl.ocx')['HtmlHelpA'], [VOIDP, VOIDP, DWORD, VOIDP], VOIDP, STDCALL)
+        rescue Fiddle::DLError
+          nil
+        end
+    end
+
+    # ole_show_help: open +helpfile+ at +context+ (falling back to just the
+    # file), returning the help window handle, 0 when it couldn't.
+    def show_html_help(helpfile, context)
+      return 0 unless html_help_fn
+
+      file = "#{helpfile}\x00".b
+      desktop = get_desktop_window.call
+      hwnd = html_help_fn.call(desktop, file, HH_HELP_CONTEXT, context).to_i
+      hwnd = html_help_fn.call(desktop, file, HH_DISPLAY_TOPIC, context).to_i if hwnd.zero?
+      hwnd
+    end
+
     def peek_message
       @peek_message ||= Fiddle::Function.new(
         user32['PeekMessageW'], [VOIDP, VOIDP, DWORD, DWORD, DWORD], DWORD, STDCALL

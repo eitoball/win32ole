@@ -85,6 +85,25 @@ class WIN32OLE
       nil
     end
 
+    # fole_s_show_help: open +target+'s help -- a help file path, or a
+    # WIN32OLE::Type / WIN32OLE::Method's own help file at its context.
+    def ole_show_help(target, helpcontext = nil)
+      if target.is_a?(WIN32OLE::Type) || target.is_a?(WIN32OLE::Method)
+        helpfile = target.helpfile
+        raise ::RuntimeError, "no helpfile of `#{target.name}'" if helpfile.to_s.empty?
+
+        helpcontext = target.helpcontext
+      else
+        helpfile = target
+      end
+      raise TypeError, '1st parameter must be (String|WIN32OLE::Type|WIN32OLE::Method)' unless helpfile.is_a?(::String)
+
+      hwnd = W.show_html_help(helpfile, Integer(helpcontext))
+      raise ::RuntimeError, "failed to open help file `#{helpfile}'" if hwnd.zero?
+
+      nil
+    end
+
     # fole_s_reference_count (a debugging aid): the IDispatch's reference
     # count, read with an AddRef/Release pair.
     def ole_reference_count(obj)

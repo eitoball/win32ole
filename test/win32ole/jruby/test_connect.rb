@@ -2,7 +2,7 @@
 require 'test/unit'
 
 if RUBY_ENGINE == 'jruby'
-require 'win32ole/jruby/win32ole'
+require 'win32ole/jruby'
 
 # WIN32OLE.connect falls back to moniker binding (ole_bind_obj) when the
 # name is neither a ProgID nor a CLSID -- e.g. "winmgmts:". The ole32 entry
@@ -138,6 +138,60 @@ class TestOleInitialize < Test::Unit::TestCase
   def test_a_failed_initialize_raises
     @init_hr = -2147417850 # RPC_E_CHANGED_MODE
     assert_raise(RuntimeError) { WIN32OLE.ole_initialize }
+  end
+end
+
+# fole_s_show_help: open a help file (String) or a Type/Method's own help
+# file at its help context, via HtmlHelp.
+class TestOleShowHelp < Test::Unit::TestCase
+  W = WIN32OLE::Win32
+  HelpTarget = Struct.new(:helpfile, :helpcontext, :name)
+
+  def setup
+    @opened = []
+    opened = @opened
+    @hwnd = 0x100
+    test = self
+    @original = W.method(:show_html_help)
+    W.define_singleton_method(:show_html_help) { |file, context| opened << [file, context]; test.hwnd }
+  end
+
+  attr_reader :hwnd
+
+  def teardown
+    W.define_singleton_method(:show_html_help, @original)
+  end
+
+  def type_target(helpfile)
+    target = WIN32OLE::Type.allocate
+    target.instance_variable_set(:@helpfile, helpfile)
+    target.instance_variable_set(:@help_context, 42)
+    target.instance_variable_set(:@name, 'Folder')
+    target
+  end
+
+  def test_a_type_opens_its_own_help_file_at_its_context
+    assert_nil(WIN32OLE.ole_show_help(type_target('C:\x.chm')))
+    assert_equal([['C:\x.chm', 42]], @opened)
+  end
+
+  def test_a_string_is_the_help_file
+    WIN32OLE.ole_show_help('C:\y.chm', 7)
+    assert_equal([['C:\y.chm', 7]], @opened)
+  end
+
+  def test_a_type_without_a_help_file_is_an_error
+    err = assert_raise(RuntimeError) { WIN32OLE.ole_show_help(type_target('')) }
+    assert_match(/no helpfile of `Folder'/, err.message)
+  end
+
+  def test_anything_else_is_a_type_error
+    assert_raise(TypeError) { WIN32OLE.ole_show_help(1) }
+  end
+
+  def test_a_failed_open_is_an_error
+    @hwnd = 0
+    assert_raise(RuntimeError) { WIN32OLE.ole_show_help('C:\z.chm', 1) }
   end
 end
 end
