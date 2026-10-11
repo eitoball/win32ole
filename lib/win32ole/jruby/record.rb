@@ -158,7 +158,7 @@ class WIN32OLE
         hr = self.class.put_field_fn(@pri).call(
           @pri, W::DISPATCH_PROPERTYPUT, buffer_ptr.to_i, W.wstr(name), W.native_pointer_for(var_bytes)
         )
-        to_free.each { |bstr| W.sys_free_string.call(bstr) }
+        to_free.each(&:call)
         raise WIN32OLE::RuntimeError, "failed to putfield of `#{name}': #{W.hr_hex(hr)}" if W.failed?(hr)
       end
 

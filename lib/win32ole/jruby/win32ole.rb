@@ -167,10 +167,13 @@ class WIN32OLE
       W.vtable_function(ptr, 2, [W::VOIDP], W::DWORD).call(ptr)
     end
 
+    # +to_free+ collects a proc per allocation behind the VARIANT (C's
+    # VariantClear of it); call them once the VARIANT is no longer needed.
     def ruby_value_to_variant_bytes(value, to_free)
       case value
       when ::Array
         psa = SafeArray.ruby_array_to_safearray(value, W::VT_VARIANT, to_free)
+        to_free << -> { SafeArray.safe_array_destroy.call(psa) }
         return W.pack_variant(W::VT_VARIANT | W::VT_ARRAY, W.pack_pointer(psa.to_i))
       when WIN32OLE::Record
         return value.to_variant_bytes
@@ -188,7 +191,7 @@ class WIN32OLE
         when :empty then W.pack_empty
         when :bstr
           bstr = W.sys_alloc_string.call(W.wstr(value))
-          to_free << bstr
+          to_free << -> { W.sys_free_string.call(bstr) }
           W.pack_pointer(bstr)
         when :dispatch
           W.pack_pointer(value.instance_variable_get(:@ptr))
@@ -744,7 +747,7 @@ class WIN32OLE
     result = ("\x00" * W::VARIANT_SIZE).b
 
     hr = invoke_fn.call(@ptr, dispid, W::IID_NULL, 0, dispkind, dispparams, result, excepinfo, nil)
-    to_free.each { |bstr| W.sys_free_string.call(bstr) unless bstr.zero? }
+    to_free.each(&:call)
 
     if W.failed?(hr)
       raise WIN32OLE::RuntimeError, W.method_error_message("<dispatch id:#{dispid}>", error_detail(hr, excepinfo))

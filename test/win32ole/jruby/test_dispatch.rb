@@ -70,6 +70,25 @@ class TestDispatch < Test::Unit::TestCase
     assert_equal({ dispid: 100, values: [2, 1], named: [] }, @calls.last)
   end
 
+  # An Array argument becomes a SAFEARRAY that only lives for the call
+  # (C VariantClears the argument VARIANTs after Invoke).
+  def test_an_array_arguments_safearray_is_destroyed_after_the_call
+    sa = WIN32OLE::SafeArray
+    originals = { ruby_array_to_safearray: sa.method(:ruby_array_to_safearray), safe_array_destroy: sa.method(:safe_array_destroy) }
+    events = []
+    calls = @calls
+    sa.define_singleton_method(:ruby_array_to_safearray) { |*| Fiddle::Pointer.new(0x1234) }
+    destroy = Object.new
+    destroy.define_singleton_method(:call) { |psa| events << [:destroy, psa.to_i, calls.size] }
+    sa.define_singleton_method(:safe_array_destroy) { destroy }
+    begin
+      @ole.add([1, 2])
+    ensure
+      originals.each { |name, m| sa.define_singleton_method(name, m) }
+    end
+    assert_equal([[:destroy, 0x1234, 1]], events) # after the one Invoke
+  end
+
   def with_refcount(count)
     refs = [count]
     add_ref = Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) { |_| refs[0] += 1 }

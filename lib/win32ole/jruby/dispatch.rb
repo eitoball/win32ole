@@ -89,7 +89,7 @@ class WIN32OLE
       result = ("\x00" * W::VARIANT_SIZE).b
 
       hr = invoke_fn.call(@ptr, dispid, W::IID_NULL, 0, wflags, dispparams, result, excepinfo, nil)
-      to_free.each { |bstr| W.sys_free_string.call(bstr) }
+      to_free.each(&:call)
       [hr, result, excepinfo]
     end
 
