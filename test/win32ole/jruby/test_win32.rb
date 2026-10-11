@@ -370,10 +370,10 @@ class TestWin32 < Test::Unit::TestCase
   def test_utf16_to_s_tags_the_result_with_the_codepage_encoding
     utf16 = "あ".encode('UTF-16LE').b
     with_codepage(W::CP_UTF8) do
-      assert_equal("\xE3\x81\x82".force_encoding('UTF-8'), W.utf16_to_s(utf16))
+      assert_equal("\xE3\x81\x82".dup.force_encoding('UTF-8'), W.utf16_to_s(utf16))
     end
     with_codepage(51932) do
-      assert_equal("\xA4\xA2".force_encoding('CP51932'), W.utf16_to_s(utf16))
+      assert_equal("\xA4\xA2".dup.force_encoding('CP51932'), W.utf16_to_s(utf16))
     end
   end
 
