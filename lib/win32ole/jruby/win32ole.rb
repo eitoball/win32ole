@@ -567,13 +567,15 @@ class WIN32OLE
     !dispid_for(name.to_s).nil?
   end
 
-  def ole_method_help(*)
-    raise NotImplementedError, 'launching help files is not implemented (Phase 2 non-goal)'
+  # fole_method_help: the WIN32OLE::Method named +name+ on this object's
+  # type. (ole_method_help is an alias of it, and ole_obj_help one of
+  # ole_type -- neither launches a help file; only WIN32OLE.ole_show_help
+  # does.)
+  def ole_method(name)
+    WIN32OLE::Method.new(type_via_containing_typelib, self.class.send(:string_value, name))
   end
-
-  def ole_obj_help
-    raise NotImplementedError, 'launching help files is not implemented (Phase 2 non-goal)'
-  end
+  alias ole_method_help ole_method
+  alias ole_obj_help ole_type
 
   # ext/win32ole/win32ole.c's fole_query_interface: like C, the returned
   # interface pointer is wrapped as a WIN32OLE (i.e. treated as IDispatch*).

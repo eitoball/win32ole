@@ -2,7 +2,7 @@
 require 'test/unit'
 
 if RUBY_ENGINE == 'jruby'
-require 'win32ole/jruby/win32ole'
+require 'win32ole/jruby'
 
 class TestDispatch < Test::Unit::TestCase
   W = WIN32OLE::Win32
@@ -68,6 +68,30 @@ class TestDispatch < Test::Unit::TestCase
   def test_no_hash_means_no_named_arguments
     @ole.add(1, 2)
     assert_equal({ dispid: 100, values: [2, 1], named: [] }, @calls.last)
+  end
+
+  # In ext/win32ole these are aliases, not help-file launchers:
+  # ole_method_help is ole_method, ole_obj_help is ole_type.
+  def test_help_methods_are_aliases
+    assert_equal(:ole_method, WIN32OLE.instance_method(:ole_method_help).original_name)
+    assert_equal(:ole_type, WIN32OLE.instance_method(:ole_obj_help).original_name)
+  end
+
+  # fole_method_help: the WIN32OLE::Method named +name+ on the object's
+  # type (Method.new searches it case-insensitively, implemented types too).
+  def test_ole_method_builds_the_named_method_on_the_objects_type
+    type = Object.new
+    @ole.define_singleton_method(:type_via_containing_typelib) { type }
+    received = nil
+    original = WIN32OLE::Method.method(:new)
+    WIN32OLE::Method.define_singleton_method(:new) { |*args| received = args; :method }
+    begin
+      assert_equal(:method, @ole.ole_method('Add'))
+    ensure
+      WIN32OLE::Method.define_singleton_method(:new, original)
+    end
+    assert_equal([type, 'Add'], received)
+    assert_raise(TypeError) { @ole.ole_method(1) }
   end
 
   # fole_free: Release the IDispatch once and forget it.
