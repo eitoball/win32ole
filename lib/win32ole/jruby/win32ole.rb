@@ -63,6 +63,28 @@ class WIN32OLE
       nil
     end
 
+    # ole_initialize (fole_s_ole_initialize): OleInitialize once per thread
+    # -- COM initialization is per OS thread, hence a thread variable, not
+    # a fiber-local Thread#[]. (C also installs an OLE message filter; this
+    # port doesn't.)
+    def ole_initialize
+      return nil if Thread.current.thread_variable_get(:win32ole_ole_initialized)
+
+      hr = W.ole_initialize_fn.call(nil)
+      raise ::RuntimeError, "fail: OLE initialize\n#{hresult_detail(hr)}" if W.failed?(hr)
+
+      Thread.current.thread_variable_set(:win32ole_ole_initialized, true)
+      nil
+    end
+
+    def ole_uninitialize
+      return nil unless Thread.current.thread_variable_get(:win32ole_ole_initialized)
+
+      W.ole_uninitialize_fn.call
+      Thread.current.thread_variable_set(:win32ole_ole_initialized, nil)
+      nil
+    end
+
     # fole_s_reference_count (a debugging aid): the IDispatch's reference
     # count, read with an AddRef/Release pair.
     def ole_reference_count(obj)
@@ -94,8 +116,7 @@ class WIN32OLE
       server = string_value(server)
       raise NotImplementedError, 'remote OLE (host) is not supported yet' unless host.nil?
 
-      hr = W.co_initialize.call(nil)
-      raise 'fail: OLE initialize' unless hr.zero? || hr == 1
+      ole_initialize
 
       # fole_s_connect: a name that is neither a ProgID nor a CLSID is
       # bound as a moniker (e.g. "winmgmts:").
@@ -358,8 +379,7 @@ class WIN32OLE
       raise NotImplementedError, 'remote OLE (host) is not supported yet'
     end
 
-    hr = W.co_initialize.call(nil)
-    raise 'fail: OLE initialize' unless hr.zero? || hr == 1
+    self.class.ole_initialize
 
     clsid = self.class.send(:resolve_clsid, server)
     ppv = ("\x00" * W::PTR_SIZE).b

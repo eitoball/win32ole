@@ -496,12 +496,12 @@ class WIN32OLE
       out[0, (len - 1) * 2].force_encoding('UTF-16LE').encode('UTF-8')
     end
 
-    def co_initialize
-      @co_initialize ||= Fiddle::Function.new(ole32['CoInitialize'], [VOIDP], LONG, STDCALL)
+    def ole_initialize_fn
+      @ole_initialize_fn ||= Fiddle::Function.new(ole32['OleInitialize'], [VOIDP], LONG, STDCALL)
     end
 
-    def co_uninitialize
-      @co_uninitialize ||= Fiddle::Function.new(ole32['CoUninitialize'], [], VOID, STDCALL)
+    def ole_uninitialize_fn
+      @ole_uninitialize_fn ||= Fiddle::Function.new(ole32['OleUninitialize'], [], VOID, STDCALL)
     end
 
     def clsid_from_progid

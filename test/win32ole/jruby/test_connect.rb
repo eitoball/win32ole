@@ -41,6 +41,7 @@ class TestConnectMoniker < Test::Unit::TestCase
   end
 
   def setup
+    @ole_initialized = Thread.current.thread_variable_get(:win32ole_ole_initialized)
     @keep = []
     @mem = []
     @originals = {}
@@ -65,7 +66,7 @@ class TestConnectMoniker < Test::Unit::TestCase
     moniker = @moniker
     @parsed = []
     parsed = @parsed
-    stub(:co_initialize, FakeFn.new { |_| 0 })
+    stub(:ole_initialize_fn, FakeFn.new { |_| 0 })
     stub(:clsid_from_progid, FakeFn.new { |*| CO_E_CLASSSTRING })
     stub(:clsid_from_string, FakeFn.new { |*| CO_E_CLASSSTRING })
     stub(:create_bind_ctx, FakeFn.new { |_reserved, out| out[0, W::PTR_SIZE] = [bindctx].pack(W::PACK_PTR); 0 })
@@ -76,9 +77,12 @@ class TestConnectMoniker < Test::Unit::TestCase
     end)
   end
 
+  # The stubbed OleInitialize must not leave the thread marked as
+  # initialized for the real COM tests that run after this one.
   def teardown
     @originals.each { |name, m| W.define_singleton_method(name, m) }
     @mem.each { |p| Fiddle.free(p) }
+    Thread.current.thread_variable_set(:win32ole_ole_initialized, @ole_initialized)
   end
 
   def test_an_unresolvable_name_is_bound_as_a_moniker
@@ -94,6 +98,46 @@ class TestConnectMoniker < Test::Unit::TestCase
     assert_equal([[@bindctx, 'winmgmts:']], @parsed)
     assert_equal([[@bindctx, W::IID_IDISPATCH]], @bound)
     assert_equal([@moniker, @bindctx], @released) # both released, the IDispatch kept
+  end
+end
+
+# ole_initialize / ole_uninitialize: OleInitialize once per thread (COM
+# initialization is per OS thread), undone by OleUninitialize.
+class TestOleInitialize < Test::Unit::TestCase
+  W = WIN32OLE::Win32
+
+  def setup
+    @calls = []
+    calls = @calls
+    @originals = %i[ole_initialize_fn ole_uninitialize_fn hresult_system_message].to_h { |name| [name, W.method(name)] }
+    W.define_singleton_method(:hresult_system_message) { |_hr| '' } # FormatMessage
+    @init_hr = 0
+    test = self
+    W.define_singleton_method(:ole_initialize_fn) { TestConnectMoniker::FakeFn.new { |_| calls << :init; test.init_hr } }
+    W.define_singleton_method(:ole_uninitialize_fn) { TestConnectMoniker::FakeFn.new { calls << :uninit; nil } }
+    @ole_initialized = Thread.current.thread_variable_get(:win32ole_ole_initialized)
+    Thread.current.thread_variable_set(:win32ole_ole_initialized, nil)
+  end
+
+  attr_reader :init_hr
+
+  def teardown
+    @originals.each { |name, m| W.define_singleton_method(name, m) }
+    Thread.current.thread_variable_set(:win32ole_ole_initialized, @ole_initialized)
+  end
+
+  def test_initializes_once_per_thread_and_uninitializes
+    WIN32OLE.ole_initialize
+    WIN32OLE.ole_initialize
+    Thread.new { WIN32OLE.ole_initialize }.join
+    WIN32OLE.ole_uninitialize
+    WIN32OLE.ole_uninitialize
+    assert_equal(%i[init init uninit], @calls)
+  end
+
+  def test_a_failed_initialize_raises
+    @init_hr = -2147417850 # RPC_E_CHANGED_MODE
+    assert_raise(RuntimeError) { WIN32OLE.ole_initialize }
   end
 end
 end
