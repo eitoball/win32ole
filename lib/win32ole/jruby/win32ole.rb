@@ -194,7 +194,12 @@ class WIN32OLE
           to_free << -> { W.sys_free_string.call(bstr) }
           W.pack_pointer(bstr)
         when :dispatch
-          W.pack_pointer(value.instance_variable_get(:@ptr))
+          ptr = value.instance_variable_get(:@ptr)
+          if ptr && !ptr.zero?
+            W.add_ref(ptr)
+            to_free << -> { release_com_pointer(ptr) }
+          end
+          W.pack_pointer(ptr)
         when :date
           W.pack_r8(W.time_to_vtdate(value))
         end

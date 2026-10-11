@@ -89,6 +89,21 @@ class TestDispatch < Test::Unit::TestCase
     assert_equal([[:destroy, 0x1234, 1]], events) # after the one Invoke
   end
 
+  # ole_val2variant AddRefs a WIN32OLE argument; VariantClear after the
+  # call Releases it.
+  def test_a_win32ole_argument_is_addrefd_for_the_call_and_released_after
+    events = []
+    calls = @calls
+    add_ref = Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) { |_| events << [:add_ref, calls.size]; 2 }
+    release = Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) { |_| events << [:release, calls.size]; 1 }
+    @closures.push(add_ref, release)
+    @vtable[1 * W::PTR_SIZE, W::PTR_SIZE] = [add_ref.to_i].pack(W::PACK_PTR)
+    @vtable[2 * W::PTR_SIZE, W::PTR_SIZE] = [release.to_i].pack(W::PACK_PTR)
+
+    @ole.add(@ole)
+    assert_equal([[:add_ref, 0], [:release, 1]], events)
+  end
+
   def with_refcount(count)
     refs = [count]
     add_ref = Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) { |_| refs[0] += 1 }
