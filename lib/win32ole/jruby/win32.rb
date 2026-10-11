@@ -48,6 +48,7 @@ class WIN32OLE
     DISPATCH_METHOD      = 1
     DISPATCH_PROPERTYGET = 2
     DISPATCH_PROPERTYPUT = 4
+    DISPATCH_PROPERTYPUTREF = 8
     DISPID_PROPERTYPUT   = -3
     DISPID_VALUE         = 0
 
@@ -366,7 +367,9 @@ class WIN32OLE
           raise ArgumentError, "property put takes exactly one argument, got #{args.size}"
         end
 
-        { name: name[0..-2], wflags: DISPATCH_PROPERTYPUT, named_put: true }
+        # ole_propertyput sets both: PROPERTYPUTREF lets a by-reference
+        # (object-valued) property be assigned as well.
+        { name: name[0..-2], wflags: DISPATCH_PROPERTYPUT | DISPATCH_PROPERTYPUTREF, named_put: true }
       else
         { name: name, wflags: DISPATCH_METHOD | DISPATCH_PROPERTYGET, named_put: false }
       end

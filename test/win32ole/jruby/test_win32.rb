@@ -116,10 +116,12 @@ class TestWin32 < Test::Unit::TestCase
     assert_equal(false, plan[:named_put])
   end
 
-  def test_dispatch_plan_setter_uses_propertyput
+  # ole_propertyput: PROPERTYPUT|PROPERTYPUTREF, so a property that only
+  # takes an object by reference (SpVoice#Voice) can be set too.
+  def test_dispatch_plan_setter_uses_propertyput_and_propertyputref
     plan = W.dispatch_plan('compareMode=', [1])
     assert_equal('compareMode', plan[:name])
-    assert_equal(W::DISPATCH_PROPERTYPUT, plan[:wflags])
+    assert_equal(W::DISPATCH_PROPERTYPUT | W::DISPATCH_PROPERTYPUTREF, plan[:wflags])
     assert_equal(true, plan[:named_put])
   end
 
