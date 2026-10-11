@@ -68,7 +68,9 @@ class WIN32OLE
 
     def initialize(val, vartype = nil, _reserved = nil)
       if vartype.nil?
-        @var = WIN32OLE.ruby_value_to_variant_bytes(val, @to_free = [])
+        to_free = []
+        @var = own(WIN32OLE.ruby_value_to_variant_bytes(val, to_free), to_free)
+        track_realvar(@var)
         return
       end
 
@@ -81,18 +83,16 @@ class WIN32OLE
 
       realvar_bytes =
         if (vartype & VT::VT_ARRAY) != 0
-          @to_free = []
           # nil: the type with no SAFEARRAY behind it, as C leaves it
-          psa = val.nil? ? 0 : SA.ruby_array_to_safearray(val, base_vt, @to_free).to_i
+          psa = val.nil? ? 0 : with_temporaries { |to_free| SA.ruby_array_to_safearray(val, base_vt, to_free).to_i }
           W.pack_variant(vartype & ~VT::VT_BYREF, W.pack_pointer(psa))
         else
-          @to_free = []
           scalar_realvar(val, vartype)
         end
 
       @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
       @var = byref ? W.pack_byref(vartype & ~VT::VT_BYREF, @realvar) : @realvar
-      commit_realvar(@realvar) if byref
+      byref ? commit_realvar(@realvar) : track_realvar(@realvar)
     end
 
     def value
@@ -117,14 +117,14 @@ class WIN32OLE
             raise WIN32OLE::RuntimeError, 'array value can only be replaced with a String for a VT_UI1|VT_ARRAY Variant'
           end
 
-          psa = SA.ruby_array_to_safearray(val, base_vt, @to_free ||= [])
+          psa = SA.ruby_array_to_safearray(val, base_vt)
           W.pack_variant(vt & ~VT::VT_BYREF, W.pack_pointer(psa.to_i))
         else
           scalar_realvar(val, vt)
         end
       @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
       @var = byref ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
-      commit_realvar(@realvar) if byref
+      byref ? commit_realvar(@realvar) : track_realvar(@realvar)
     end
 
     def vartype
@@ -173,7 +173,7 @@ class WIN32OLE
       raise WIN32OLE::RuntimeError, "failed to SafeArrayLock: #{W.hr_hex(hr)}" if W.failed?(hr)
 
       begin
-        SA.write_element(psa, indices.pack('l' * indices.size), base_vt, val, @to_free ||= [])
+        with_temporaries { |to_free| SA.write_element(psa, indices.pack('l' * indices.size), base_vt, val, to_free) }
         val
       ensure
         SA.safe_array_unlock.call(psa)
@@ -205,16 +205,34 @@ class WIN32OLE
         return W.pack_variant(base_vt, W.pack_empty)
       end
 
+      to_free = []
       natural =
         case base_vt
         when VT::VT_I8 then W.pack_variant(base_vt, W.pack_i8(val))
         when VT::VT_UI8 then W.pack_variant(base_vt, W.pack_ui8(val))
-        else WIN32OLE.ruby_value_to_variant_bytes(val, @to_free ||= [])
+        else WIN32OLE.ruby_value_to_variant_bytes(val, to_free)
         end
-      return natural if base_vt == VT::VT_VARIANT
-
       natural_vt, = W.unpack_variant(natural)
-      natural_vt == base_vt ? natural : W.change_variant_type(natural, base_vt)
+      return own(natural, to_free) if base_vt == VT::VT_VARIANT || natural_vt == base_vt
+
+      # VariantChangeTypeEx makes a VARIANT of its own.
+      with_temporaries(to_free) { W.change_variant_type(natural, base_vt) }
+    end
+
+    # Runs the block with a list for the temporary allocations of the
+    # VARIANTs it builds, and frees them once it's done.
+    def with_temporaries(to_free = [])
+      yield to_free
+    ensure
+      to_free.each(&:call)
+    end
+
+    # +var+ as a VARIANT owning what it holds: a VariantCopy, when the
+    # temporaries in +to_free+ (freed here) own it.
+    def own(var, to_free)
+      return var if to_free.empty?
+
+      with_temporaries(to_free) { W.variant_copy(var) }
     end
 
     # ole_val2variant_err: an Integer SCODE (or nil for 0), possibly held
@@ -234,7 +252,7 @@ class WIN32OLE
       byref = (vt & VT::VT_BYREF) != 0
       @realvar = byref ? persist_realvar(realvar_bytes) : realvar_bytes
       @var = byref ? W.pack_byref(vt & ~VT::VT_BYREF, @realvar) : @realvar
-      commit_realvar(@realvar) if byref
+      byref ? commit_realvar(@realvar) : track_realvar(@realvar)
     end
 
     # Allocates a persistent buffer for bytes and returns it -- does NOT
@@ -247,10 +265,22 @@ class WIN32OLE
     # leave the finalizer holding an already-freed pointer (double-free
     # at GC time).
     def persist_realvar(bytes)
+      realvar_state
+      W.persistent_pointer_for(bytes)
+    end
+
+    def realvar_state
       @realvar_finalizer_state ||= {}.tap do |state|
         ObjectSpace.define_finalizer(self, self.class.realvar_finalizer(state))
       end
-      W.persistent_pointer_for(bytes)
+    end
+
+    # The non-VT_BYREF counterpart of commit_realvar: +bytes+ is now the
+    # realvar, and what the one before held is cleared.
+    def track_realvar(bytes)
+      old = realvar_state[:bytes]
+      realvar_state[:bytes] = bytes
+      self.class.clear_realvar(old) if old
     end
 
     # Stores ptr as the current realvar buffer and frees whatever was
@@ -259,11 +289,33 @@ class WIN32OLE
     def commit_realvar(ptr)
       old_ptr = @realvar_finalizer_state[:ptr]
       @realvar_finalizer_state[:ptr] = ptr
-      Fiddle.free(old_ptr) if old_ptr
+      return unless old_ptr
+
+      self.class.clear_realvar(old_ptr)
+      Fiddle.free(old_ptr)
     end
 
+    # olevariant_free: VariantClear what the realvar holds now (for
+    # VT_BYREF, whatever the buffer holds -- a callee may have replaced it),
+    # then free the buffer. Runs at most once.
     def self.realvar_finalizer(state)
-      proc { Fiddle.free(state[:ptr]) if state[:ptr] }
+      proc do
+        if (ptr = state.delete(:ptr))
+          clear_realvar(ptr)
+          Fiddle.free(ptr)
+        end
+        bytes = state.delete(:bytes)
+        clear_realvar(bytes) if bytes
+      end
+    end
+
+    # VariantClear, skipped for the types that own nothing.
+    def self.clear_realvar(var)
+      bytes = var.is_a?(::String) ? var : Fiddle::Pointer.new(var.to_i)[0, W::VARIANT_SIZE]
+      vt, = W.unpack_variant(bytes)
+      owns = (vt & VT::VT_ARRAY) != 0 ||
+             [VT::VT_BSTR, VT::VT_DISPATCH, VT::VT_UNKNOWN, VT::VT_RECORD].include?(vt & VT::VT_TYPEMASK)
+      W.variant_clear(var) if owns
     end
 
     def array_state

@@ -64,6 +64,79 @@ class TestVariantArgumentCopy < Test::Unit::TestCase
   end
 end
 
+# olevariant_free: a Variant owns what its realvar holds and VariantClears
+# it at GC (VT_BYREF: whatever the buffer holds by then, a callee's
+# replacement included); value= clears the value it replaces. What the
+# conversion allocated besides is freed at once.
+class TestVariantOwnership < Test::Unit::TestCase
+  W = WIN32OLE::Win32
+  V = WIN32OLE::Variant
+  VT = WIN32OLE::VariantType
+  FakeFn = TestVariantArgumentCopy::FakeFn
+
+  def setup
+    @events = []
+    events = @events
+    bstrs = [0x1000, 0x2000]
+    stubs = {
+      sys_alloc_string: FakeFn.new { |_| bstrs.shift },
+      sys_free_string: FakeFn.new { |bstr| events << [:free, bstr] },
+      # a copy holds the original's pointer + 1
+      variant_copy_fn: FakeFn.new do |dest, src|
+        vt, payload = W.unpack_variant(src)
+        dest[0, W::VARIANT_SIZE] = W.pack_variant(vt, W.pack_pointer(W.unpack_pointer(payload) + 1))
+        0
+      end,
+      variant_clear_fn: FakeFn.new do |var|
+        bytes = var.is_a?(::String) ? var : Fiddle::Pointer.new(var.to_i)[0, W::VARIANT_SIZE]
+        events << [:clear, W.unpack_pointer(W.unpack_variant(bytes)[1])]
+        0
+      end
+    }
+    @originals = stubs.keys.to_h { |name| [name, W.method(name)] }
+    stubs.each { |name, fn| W.define_singleton_method(name) { fn } }
+  end
+
+  def teardown
+    @originals.each { |name, m| W.define_singleton_method(name, m) }
+  end
+
+  def finalize(variant)
+    V.realvar_finalizer(variant.instance_variable_get(:@realvar_finalizer_state)).call
+  end
+
+  def test_a_variant_owns_a_copy_and_clears_it_at_gc
+    v = V.new('abc')
+    assert_equal([[:free, 0x1000]], @events) # the conversion's own BSTR, at once
+    finalize(v)
+    assert_equal([[:free, 0x1000], [:clear, 0x1001]], @events)
+  end
+
+  def test_a_byref_variant_clears_what_its_buffer_holds_at_gc
+    v = V.new('abc', VT::VT_BSTR | VT::VT_BYREF)
+    replacement = W.pack_variant(VT::VT_BSTR, W.pack_pointer(0x9000)) # a callee's in/out replacement
+    v.instance_variable_get(:@realvar)[0, W::VARIANT_SIZE] = replacement
+    finalize(v)
+    assert_equal([:clear, 0x9000], @events.last)
+  end
+
+  def test_value_assignment_clears_the_replaced_value
+    v = V.new('abc', VT::VT_BSTR)
+    v.value = 'def'
+    assert_include(@events, [:clear, 0x1001])
+    @events.clear
+    finalize(v)
+    assert_equal([[:clear, 0x2001]], @events)
+  end
+
+  def test_finalizing_twice_clears_once
+    v = V.new('abc')
+    finalize(v)
+    finalize(v)
+    assert_equal(1, @events.count { |e| e.first == :clear })
+  end
+end
+
 class TestVariantByRefRoundTrip < Test::Unit::TestCase
   def test_mutating_realvar_bytes_is_visible_through_the_byref_pointer
     v = WIN32OLE::Variant.new(42, WIN32OLE::VariantType::VT_I4 | WIN32OLE::VariantType::VT_BYREF)
