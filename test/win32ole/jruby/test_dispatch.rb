@@ -70,6 +70,19 @@ class TestDispatch < Test::Unit::TestCase
     assert_equal({ dispid: 100, values: [2, 1], named: [] }, @calls.last)
   end
 
+  # fole_free: Release the IDispatch once and forget it.
+  def test_ole_free_releases_once_and_forgets_the_pointer
+    released = []
+    release = Fiddle::Closure::BlockCaller.new(W::DWORD, [W::VOIDP], W::STDCALL) { |this| released << this.to_i; 0 }
+    @closures << release
+    @vtable[2 * W::PTR_SIZE, W::PTR_SIZE] = [release.to_i].pack(W::PACK_PTR)
+
+    assert_nil(@ole.ole_free)
+    assert_nil(@ole.ole_free)
+    assert_equal([@obj.to_i], released)
+    assert_raise(WIN32OLE::RuntimeError) { @ole.add(1) }
+  end
+
   def fake_object(slots)
     vtable = Fiddle::Pointer.malloc(W::PTR_SIZE * 7)
     7.times { |i| vtable[i * W::PTR_SIZE, W::PTR_SIZE] = [0].pack(W::PACK_PTR) }

@@ -77,11 +77,15 @@ class WIN32OLE
       hr = W.co_initialize.call(nil)
       raise 'fail: OLE initialize' unless hr.zero? || hr == 1
 
-      clsid = resolve_clsid(server)
+      # fole_s_connect: a name that is neither a ProgID nor a CLSID is
+      # bound as a moniker (e.g. "winmgmts:").
+      clsid = clsid_for(server)
+      return bind_moniker(server) if clsid.nil?
+
       ppv = ("\x00" * W::PTR_SIZE).b
       hr = W.get_active_object.call(clsid, nil, ppv)
       if W.failed?(hr)
-        raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{hresult_detail(hr)}"
+        raise WIN32OLE::RuntimeError, "OLE server `#{server}' not running\n#{hresult_detail(hr)}"
       end
 
       # GetActiveObject's out-parameter is IUnknown**, not IDispatch** --
@@ -210,15 +214,56 @@ class WIN32OLE
     end
 
     def resolve_clsid(server)
+      clsid, hr = clsid_and_hr(server)
+      return clsid if clsid
+
+      raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{hresult_detail(hr)}"
+    end
+
+    # The CLSID for a ProgID or "{...}" CLSID string, or nil.
+    def clsid_for(server)
+      clsid_and_hr(server).first
+    end
+
+    def clsid_and_hr(server)
       wide = W.wstr(server)
       clsid = ("\x00" * 16).b
       hr = W.clsid_from_progid.call(wide, clsid)
       hr = W.clsid_from_string.call(wide, clsid) if W.failed?(hr)
-      if W.failed?(hr)
-        raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{hresult_detail(hr)}"
-      end
+      [W.failed?(hr) ? nil : clsid, hr]
+    end
 
-      clsid
+    IMONIKER_BIND_TO_OBJECT = 8 # IUnknown(3) + IPersist(1) + IPersistStream(4)
+
+    # ole_bind_obj: CreateBindCtx + MkParseDisplayName + IMoniker::BindToObject
+    # for IDispatch.
+    def bind_moniker(moniker)
+      out = ("\x00" * W::PTR_SIZE).b
+      hr = W.create_bind_ctx.call(0, out)
+      raise WIN32OLE::RuntimeError, "failed to create bind context\n#{hresult_detail(hr)}" if W.failed?(hr)
+
+      bindctx = out.unpack1(W::PACK_PTR)
+      begin
+        eaten = ("\x00" * 4).b
+        out = ("\x00" * W::PTR_SIZE).b
+        hr = W.mk_parse_display_name.call(bindctx, W.wstr(moniker), eaten, out)
+        if W.failed?(hr)
+          raise WIN32OLE::RuntimeError, "failed to parse display name of moniker `#{moniker}'\n#{hresult_detail(hr)}"
+        end
+
+        pmoniker = out.unpack1(W::PACK_PTR)
+        begin
+          out = ("\x00" * W::PTR_SIZE).b
+          hr = W.vtable_function(pmoniker, IMONIKER_BIND_TO_OBJECT, [W::VOIDP] * 5, W::LONG)
+                .call(pmoniker, bindctx, nil, W::IID_IDISPATCH, out)
+          raise WIN32OLE::RuntimeError, "failed to bind moniker `#{moniker}'\n#{hresult_detail(hr)}" if W.failed?(hr)
+        ensure
+          release_com_pointer(pmoniker)
+        end
+      ensure
+        release_com_pointer(bindctx)
+      end
+      wrap_dispatch_pointer(out.unpack1(W::PACK_PTR))
     end
 
     def hresult_detail(hr)
@@ -282,7 +327,8 @@ class WIN32OLE
       String.try_convert(val) || raise(TypeError, "no implicit conversion of #{val.class} into String")
     end
 
-    private :resolve_clsid, :hresult_detail, :release_com_pointer, :string_value
+    private :resolve_clsid, :clsid_for, :clsid_and_hr, :bind_moniker, :hresult_detail, :release_com_pointer,
+            :string_value
   end
 
   def initialize(server, host = nil)
@@ -473,6 +519,12 @@ class WIN32OLE
     end
 
     args.last
+  end
+
+  # fole_free: Release the IDispatch now instead of at GC time.
+  def ole_free
+    release
+    nil
   end
 
   # WIN32OLE::Event needs this raw IDispatch* to build its own COM

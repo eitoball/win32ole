@@ -518,6 +518,16 @@ class WIN32OLE
       )
     end
 
+    def create_bind_ctx
+      @create_bind_ctx ||= Fiddle::Function.new(ole32['CreateBindCtx'], [DWORD, VOIDP], LONG, STDCALL)
+    end
+
+    def mk_parse_display_name
+      @mk_parse_display_name ||= Fiddle::Function.new(
+        ole32['MkParseDisplayName'], [VOIDP, VOIDP, VOIDP, VOIDP], LONG, STDCALL
+      )
+    end
+
     def get_active_object
       @get_active_object ||= Fiddle::Function.new(oleaut32['GetActiveObject'], [VOIDP, VOIDP, VOIDP], LONG, STDCALL)
     end
