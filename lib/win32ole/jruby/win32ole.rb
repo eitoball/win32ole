@@ -580,6 +580,27 @@ class WIN32OLE
     args.last
   end
 
+  IPERSISTMEMORY_INIT_NEW = 8 # IUnknown(3) + IPersist(1) + IsDirty/Load/Save/GetSizeMax
+
+  # fole_activex_initialize: initialize an ActiveX control through its
+  # IPersistMemory::InitNew.
+  def ole_activex_initialize
+    persist = W.query_interface(@ptr, W::IID_IPERSISTMEMORY)
+    hr = -2147467262 # E_NOINTERFACE
+    if persist
+      begin
+        hr = W.vtable_function(persist, IPERSISTMEMORY_INIT_NEW, [W::VOIDP], W::LONG).call(persist)
+      ensure
+        self.class.send(:release_com_pointer, persist)
+      end
+    end
+    if W.failed?(hr)
+      raise WIN32OLE::RuntimeError, "fail to initialize ActiveX control\n#{self.class.send(:hresult_detail, hr)}"
+    end
+
+    nil
+  end
+
   # fole_free: Release the IDispatch now instead of at GC time.
   def ole_free
     release

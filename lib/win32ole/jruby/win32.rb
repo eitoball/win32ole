@@ -96,6 +96,7 @@ class WIN32OLE
     IID_NULL      = ("\x00" * 16).b
     IID_IDISPATCH = [0x00020400, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46].pack('LSSC8')
     IID_IENUMVARIANT = [0x00020404, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46].pack('LSSC8')
+    IID_IPERSISTMEMORY = [0xBD1AE5E0, 0xA6AE, 0x11CE, 0xBD, 0x37, 0x50, 0x42, 0x00, 0xC1, 0x00, 0x00].pack('LSSC8')
     DISPID_NEWENUM = -4
 
     # Well-known, decades-stable OLE Automation interface IDs (ocidl.h /

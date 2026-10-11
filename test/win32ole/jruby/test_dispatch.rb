@@ -135,8 +135,9 @@ class TestDispatch < Test::Unit::TestCase
   end
 
   def fake_object(slots)
-    vtable = Fiddle::Pointer.malloc(W::PTR_SIZE * 7)
-    7.times { |i| vtable[i * W::PTR_SIZE, W::PTR_SIZE] = [0].pack(W::PACK_PTR) }
+    count = [slots.keys.max + 1, 7].max
+    vtable = Fiddle::Pointer.malloc(W::PTR_SIZE * count)
+    count.times { |i| vtable[i * W::PTR_SIZE, W::PTR_SIZE] = [0].pack(W::PACK_PTR) }
     slots.each do |index, (args, ret, body)|
       closure = Fiddle::Closure::BlockCaller.new(ret, args, W::STDCALL, &body)
       @closures << closure
@@ -146,6 +147,44 @@ class TestDispatch < Test::Unit::TestCase
     obj[0, W::PTR_SIZE] = [vtable.to_i].pack(W::PACK_PTR)
     @fakes.push(obj, vtable)
     obj
+  end
+
+  IID_IPERSISTMEMORY = [0xBD1AE5E0, 0xA6AE, 0x11CE, 0xBD, 0x37, 0x50, 0x42, 0x00, 0xC1, 0x00, 0x00].pack('LSSC8')
+
+  # fole_activex_initialize: QueryInterface IPersistMemory and InitNew it.
+  def activex_fixture(init_hr)
+    @fakes = []
+    calls = []
+    persist = fake_object(
+      2 => [[W::VOIDP], W::DWORD, proc { |_| calls << :release; 0 }],
+      8 => [[W::VOIDP], W::LONG, proc { |_| calls << :init_new; init_hr }]
+    )
+    qi = Fiddle::Closure::BlockCaller.new(W::LONG, [W::VOIDP, W::VOIDP, W::VOIDP], W::STDCALL) do |_this, riid, ppv|
+      calls << :qi if riid[0, 16] == IID_IPERSISTMEMORY
+      ppv[0, W::PTR_SIZE] = [persist.to_i].pack(W::PACK_PTR)
+      0
+    end
+    @closures << qi
+    @vtable[0, W::PTR_SIZE] = [qi.to_i].pack(W::PACK_PTR)
+    calls
+  end
+
+  def test_ole_activex_initialize_inits_ipersistmemory
+    calls = activex_fixture(0)
+    assert_nil(@ole.ole_activex_initialize)
+    assert_equal(%i[qi init_new release], calls)
+  ensure
+    @fakes&.each { |p| Fiddle.free(p) }
+  end
+
+  def test_ole_activex_initialize_raises_when_initnew_fails
+    original = W.method(:hresult_system_message)
+    W.define_singleton_method(:hresult_system_message) { |_| '' } # FormatMessage
+    activex_fixture(-2147467259) # E_FAIL
+    assert_raise(WIN32OLE::RuntimeError) { @ole.ole_activex_initialize }
+  ensure
+    W.define_singleton_method(:hresult_system_message, original) if original
+    @fakes&.each { |p| Fiddle.free(p) }
   end
 
   # _NewEnum (DISPID -4) returns a VT_UNKNOWN whose QueryInterface hands
