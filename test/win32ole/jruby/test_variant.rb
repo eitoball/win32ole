@@ -23,6 +23,47 @@ class TestVariantType < Test::Unit::TestCase
   end
 end
 
+# ole_variant2variant: a Variant converts to a VariantCopy of its VARIANT,
+# which the temporary's VariantClear frees -- the Variant keeps its own.
+class TestVariantArgumentCopy < Test::Unit::TestCase
+  W = WIN32OLE::Win32
+
+  class FakeFn
+    def initialize(&body)
+      @body = body
+    end
+
+    def call(*args)
+      @body.call(*args)
+    end
+  end
+
+  def setup
+    @events = []
+    events = @events
+    @originals = %i[variant_copy_fn variant_clear_fn].to_h { |name| [name, W.method(name)] }
+    W.define_singleton_method(:variant_copy_fn) do
+      FakeFn.new { |dest, src| events << [:copy, src.dup]; dest[0, W::VARIANT_SIZE] = 'C' * W::VARIANT_SIZE; 0 }
+    end
+    W.define_singleton_method(:variant_clear_fn) { FakeFn.new { |var| events << [:clear, var.dup]; 0 } }
+  end
+
+  def teardown
+    @originals.each { |name, m| W.define_singleton_method(name, m) }
+  end
+
+  def test_a_variant_converts_to_a_copy_that_to_free_clears
+    v = WIN32OLE::Variant.new(42)
+    to_free = []
+    bytes = WIN32OLE.ruby_value_to_variant_bytes(v, to_free)
+
+    assert_equal('C' * W::VARIANT_SIZE, bytes)
+    assert_equal([[:copy, v.instance_variable_get(:@var)]], @events)
+    to_free.each(&:call)
+    assert_equal([:clear, 'C' * W::VARIANT_SIZE], @events.last)
+  end
+end
+
 class TestVariantByRefRoundTrip < Test::Unit::TestCase
   def test_mutating_realvar_bytes_is_visible_through_the_byref_pointer
     v = WIN32OLE::Variant.new(42, WIN32OLE::VariantType::VT_I4 | WIN32OLE::VariantType::VT_BYREF)

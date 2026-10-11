@@ -770,6 +770,28 @@ class WIN32OLE
       )
     end
 
+    def variant_copy_fn
+      @variant_copy_fn ||= Fiddle::Function.new(oleaut32['VariantCopy'], [VOIDP, VOIDP], LONG, STDCALL)
+    end
+
+    def variant_clear_fn
+      @variant_clear_fn ||= Fiddle::Function.new(oleaut32['VariantClear'], [VOIDP], LONG, STDCALL)
+    end
+
+    # A VariantCopy of +variant_bytes+: its own BSTR / SAFEARRAY copy or
+    # interface reference, for variant_clear to free.
+    def variant_copy(variant_bytes)
+      dest = ("\x00" * VARIANT_SIZE).b
+      hr = variant_copy_fn.call(dest, variant_bytes)
+      raise WIN32OLE::RuntimeError, "failed to VariantCopy: #{hr_hex(hr)}" if failed?(hr)
+
+      dest
+    end
+
+    def variant_clear(variant)
+      variant_clear_fn.call(variant)
+    end
+
     PM_REMOVE = 0x0001
     MSG_SIZE = 64
 

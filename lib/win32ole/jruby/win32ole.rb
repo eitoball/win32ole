@@ -178,7 +178,10 @@ class WIN32OLE
       when WIN32OLE::Record
         return value.to_variant_bytes
       when WIN32OLE::Variant
-        return value.instance_variable_get(:@var)
+        # ole_variant2variant
+        copy = W.variant_copy(value.instance_variable_get(:@var))
+        to_free << -> { W.variant_clear(copy) }
+        return copy
       end
 
       type = W.ruby_to_variant_type(value)
