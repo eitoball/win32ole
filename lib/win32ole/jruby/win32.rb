@@ -54,6 +54,7 @@ class WIN32OLE
 
     CLSCTX_INPROC_SERVER = 0x1
     CLSCTX_LOCAL_SERVER  = 0x4
+    CLSCTX_REMOTE_SERVER = 0x10
 
     LOCALE_SYSTEM_DEFAULT = 0x0800
     LOCALE_USER_DEFAULT   = 0x0400
@@ -517,6 +518,40 @@ class WIN32OLE
       @co_create_instance ||= Fiddle::Function.new(
         ole32['CoCreateInstance'], [VOIDP, VOIDP, DWORD, VOIDP, VOIDP], LONG, STDCALL
       )
+    end
+
+    def co_create_instance_ex
+      @co_create_instance_ex ||= Fiddle::Function.new(
+        ole32['CoCreateInstanceEx'], [VOIDP, VOIDP, DWORD, VOIDP, DWORD, VOIDP], LONG, STDCALL
+      )
+    end
+
+    HKEY_LOCAL_MACHINE = 0x80000002
+
+    def reg_connect_registry
+      @reg_connect_registry ||= Fiddle::Function.new(
+        TypeInfo.advapi32['RegConnectRegistryW'], [VOIDP, VOIDP, VOIDP], LONG, STDCALL
+      )
+    end
+
+    # clsid_from_remote: +progid+'s CLSID as registered on +host+
+    # (HKLM\SOFTWARE\Classes\<progid>\CLSID there), or nil.
+    def clsid_from_remote(host, progid)
+      out = ("\x00" * PTR_SIZE).b
+      return nil unless reg_connect_registry.call(wstr(host), HKEY_LOCAL_MACHINE, out).zero?
+
+      hlm = out.unpack1(PACK_PTR)
+      begin
+        value = TypeLib.with_reg_subkey(hlm, "SOFTWARE\\Classes\\#{progid}\\CLSID") do |hkey|
+          TypeLib.reg_default_string_value(hkey)
+        end
+        return nil unless value
+
+        clsid = ("\x00" * 16).b
+        failed?(clsid_from_string.call(wstr(value), clsid)) ? nil : clsid
+      ensure
+        TypeInfo.reg_close_key.call(hlm)
+      end
     end
 
     def create_bind_ctx

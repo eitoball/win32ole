@@ -289,6 +289,10 @@ class WIN32OLE
       wide = W.wstr(server)
       clsid = ("\x00" * 16).b
       hr = W.clsid_from_progid.call(wide, clsid)
+      # ole_create_dcom tries the remote host's registry in between.
+      if W.failed?(hr) && block_given? && (remote = yield)
+        return [remote, 0]
+      end
       hr = W.clsid_from_string.call(wide, clsid) if W.failed?(hr)
       [W.failed?(hr) ? nil : clsid, hr]
     end
@@ -393,12 +397,8 @@ class WIN32OLE
 
   def initialize(server, host = nil)
     server = self.class.send(:string_value, server)
-    unless host.nil?
-      self.class.send(:string_value, host)
-      raise NotImplementedError, 'remote OLE (host) is not supported yet'
-    end
-
     self.class.ole_initialize
+    return create_dcom(server, self.class.send(:string_value, host)) unless host.nil?
 
     clsid = self.class.send(:resolve_clsid, server)
     ppv = ("\x00" * W::PTR_SIZE).b
@@ -414,6 +414,29 @@ class WIN32OLE
   end
 
   private
+
+  # ole_create_dcom: the CLSID from the ProgID here, then from the host's
+  # registry, then as a CLSID string; the object from CoCreateInstanceEx
+  # on +host+.
+  def create_dcom(server, host)
+    clsid, hr = self.class.send(:clsid_and_hr, server) { W.clsid_from_remote(host, server) }
+    raise WIN32OLE::RuntimeError, "#{W.unknown_server_error_message(server)}\n#{self.class.send(:hresult_detail, hr)}" unless clsid
+
+    host_name = W.wstr(host)
+    # COSERVERINFO { DWORD dwReserved1; LPWSTR pwszName; COAUTHINFO *pAuthInfo; DWORD dwReserved2; }
+    info = [0, Fiddle::Pointer.to_ptr(host_name).to_i, 0, 0].pack("L#{'x4' if W::PTR_SIZE == 8}#{W::PACK_PTR}#{W::PACK_PTR}L#{'x4' if W::PTR_SIZE == 8}")
+    iid = W::IID_IDISPATCH.dup
+    # MULTI_QI { const IID *pIID; IUnknown *pItf; HRESULT hr; }
+    mqi = [Fiddle::Pointer.to_ptr(iid).to_i, 0, 0].pack("#{W::PACK_PTR}#{W::PACK_PTR}l#{'x4' if W::PTR_SIZE == 8}")
+    hr = W.co_create_instance_ex.call(clsid, nil, W::CLSCTX_REMOTE_SERVER, info, 1, mqi)
+    if W.failed?(hr)
+      raise WIN32OLE::RuntimeError,
+            "failed to create DCOM server `#{server}' in `#{host}'\n#{self.class.send(:hresult_detail, hr)}"
+    end
+
+    @ptr = mqi[W::PTR_SIZE, W::PTR_SIZE].unpack1(W::PACK_PTR)
+    install_finalizer
+  end
 
   def install_finalizer
     ptr = @ptr
